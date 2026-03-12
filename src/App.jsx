@@ -31,10 +31,11 @@ const DITHER_ALGOS = {
   "FM":{g:"Modulation"},"AM":{g:"Modulation"},"Wave":{g:"Modulation"},"Contour":{g:"Modulation"},
   "Random":{g:"Noise"},"Blue Noise":{g:"Noise"},"Stipple":{g:"Noise"},"Grain":{g:"Noise"},
   "Spiral":{g:"Special"},"Concentric":{g:"Special"},"Voronoi":{g:"Special"},
+  "Plus":{g:"Shape"},"Numbers":{g:"Shape"},
   "Threshold":{g:"Basic"},
 };
 
-const DP0 = {gamma:1,bias:0,invert:false,errStr:1,serpentine:false,spread:1,htAngle:0,dotGain:0,dotSize:1,lineWeight:1,frequency:1,depth:1,direction:0,rotation:0,cellSize:8,arms:5,edgeSpread:1,scale:1,brightness:0,contrast:0,colorMode:"rgb",posterize:6,solarizeT:128,duoH:"#000000",duoL:"#00ff41",sharpen:0,blur:0,dpi:1};
+const DP0 = {gamma:1,bias:0,invert:false,errStr:1,serpentine:false,spread:1,htAngle:0,dotGain:0,dotSize:1,lineWeight:1,frequency:1,depth:1,direction:0,rotation:0,cellSize:8,arms:5,edgeSpread:1,scale:1,brightness:0,contrast:0,colorMode:"rgb",posterize:6,solarizeT:128,duoH:"#000000",duoL:"#00ff41",sharpen:0,blur:0,dpi:1,plusSize:6,plusGap:16,plusThickness:2,numBlockW:5,numBlockH:6,numFontSize:10,numGap:20};
 
 const MARATHON_PRESETS = {
   "Marathon Green":{palette:"Marathon Green",dither:"Bayer 4x4",dp:{...DP0,spread:0.8},gfx:{scanlines:{on:true,gap:2,opacity:0.4,speed:0},glitch:{on:true,intensity:0.15,blockSize:8,speed:0.5},rgbShift:{on:true,amount:3,angle:0},noise:{on:true,amount:0.08,speed:0.3},pixelate:{on:false,size:1},vignette:{on:true,strength:0.5},crt:{on:false,curvature:0.2},blockGlitch:{on:false,count:10,maxSize:50},chromatic:{on:false,amount:3},jitter:{on:false,amount:3},colorCycle:{on:false,speed:1},solarize:{on:false,threshold:128,speed:0.5}}},
@@ -133,6 +134,85 @@ function ditherImage(srcData,w,h,algo,palette,p){
       if(algo==="Spiral"){const ddx=x-w/2,ddy=y-h/2;const c=Math.sin(Math.atan2(ddy,ddx)*arms+Math.sqrt(ddx*ddx+ddy*ddy)*frequency*0.05/dpiS)<(1-br)*2-1?pal[0]:pal[pal.length-1];data[i]=c[0];data[i+1]=c[1];data[i+2]=c[2];continue;}
       if(algo==="Concentric"){const c=Math.sin(Math.sqrt((x-w/2)**2+(y-h/2)**2)*frequency*0.15/dpiS)<(1-br)*2-1?pal[0]:pal[pal.length-1];data[i]=c[0];data[i+1]=c[1];data[i+2]=c[2];continue;}
       if(algo==="Voronoi"){let d1=Infinity,d2=Infinity;for(const cell of vCells){const d=Math.sqrt((x-cell.x)**2+(y-cell.y)**2);if(d<d1){d2=d1;d1=d;}else if(d<d2)d2=d;}const c=(d2-d1)<edgeSpread*lineWeight*2*(1.2-br)?pal[0]:pal[pal.length-1];data[i]=c[0];data[i+1]=c[1];data[i+2]=c[2];continue;}
+
+      // --- Plus pattern ---
+      if(algo==="Plus"){
+        const sz=Math.max(2,Math.round((p.plusSize||6)*dpiS));
+        const gap=Math.max(sz+1,Math.round((p.plusGap||16)*dpiS));
+        const thk=Math.max(1,Math.round((p.plusThickness||2)*dpiS));
+        const halfT=Math.floor(thk/2);
+        const cx2=((x%gap)+gap)%gap-Math.floor(gap/2);
+        const cy2=((y%gap)+gap)%gap-Math.floor(gap/2);
+        const inH=Math.abs(cy2)<=halfT&&Math.abs(cx2)<=sz;
+        const inV=Math.abs(cx2)<=halfT&&Math.abs(cy2)<=sz;
+        const inPlus=inH||inV;
+        // Brightness controls whether plus is shown
+        const show=br<0.7;
+        const on=inPlus&&show;
+        // Also modulate: very dark areas get bigger plus via additional check
+        const c=on?pal[pal.length-1]:pal[0];
+        data[i]=c[0];data[i+1]=c[1];data[i+2]=c[2];continue;
+      }
+
+      // --- Numbers pattern ---
+      if(algo==="Numbers"){
+        const fSz=Math.max(5,Math.round((p.numFontSize||10)*dpiS));
+        const bw=p.numBlockW||5; // digits per row in block
+        const bh=p.numBlockH||6; // rows per block
+        const blockGap=Math.max(fSz,Math.round((p.numGap||20)*dpiS));
+        const charW=Math.ceil(fSz*0.65);
+        const charH=fSz;
+        const blockPxW=bw*charW+blockGap;
+        const blockPxH=bh*charH+blockGap;
+        // Which block are we in?
+        const bx2=((x%blockPxW)+blockPxW)%blockPxW;
+        const by2=((y%blockPxH)+blockPxH)%blockPxH;
+        // Are we in the text area (not gap)?
+        const inTextX=bx2<bw*charW;
+        const inTextY=by2<bh*charH;
+        if(!inTextX||!inTextY){
+          const c=pal[0];data[i]=c[0];data[i+1]=c[1];data[i+2]=c[2];continue;
+        }
+        // Which char cell?
+        const cx3=Math.floor(bx2/charW);
+        const cy3=Math.floor(by2/charH);
+        // Local pixel within char cell
+        const lx=bx2-cx3*charW;
+        const ly=by2-cy3*charH;
+        // Block index for seeded random
+        const blkIdxX=Math.floor(x/blockPxW);
+        const blkIdxY=Math.floor(y/blockPxH);
+        // Seeded random digit
+        const seed=Math.abs(Math.sin(blkIdxX*127.1+blkIdxY*311.7+cx3*73.7+cy3*37.9)*43758.5453);
+        const digit=Math.floor((seed%1)*10);
+        // 3x5 bitmap font for digits 0-9
+        const GLYPHS=[0x7B6F,0x26C9,0x73E7,0x73CF,0x5BC9,0x79CF,0x79EF,0x7249,0x7BEF,0x7BC9];
+        // Each glyph is 4 wide x 5 tall stored in 20 bits (top-left first, row by row)
+        const GLYPHS4x5=[
+          [0xF,0x9,0x9,0x9,0xF],// 0
+          [0x2,0x6,0x2,0x2,0x7],// 1
+          [0xF,0x1,0xF,0x8,0xF],// 2
+          [0xF,0x1,0xF,0x1,0xF],// 3
+          [0x9,0x9,0xF,0x1,0x1],// 4
+          [0xF,0x8,0xF,0x1,0xF],// 5
+          [0xF,0x8,0xF,0x9,0xF],// 6
+          [0xF,0x1,0x2,0x4,0x4],// 7
+          [0xF,0x9,0xF,0x9,0xF],// 8
+          [0xF,0x9,0xF,0x1,0xF],// 9
+        ];
+        // Scale glyph to cell
+        const gx=Math.floor(lx/charW*4);
+        const gy=Math.floor(ly/charH*5);
+        const glyph=GLYPHS4x5[digit]||GLYPHS4x5[0];
+        const bit=(gy<5&&gx<4)?((glyph[gy]>>(3-gx))&1):0;
+        // Show block based on brightness (darker = show numbers)
+        const blockBr=br;
+        const show2=blockBr<0.65;
+        const on2=bit&&show2;
+        const c=on2?pal[pal.length-1]:pal[0];
+        data[i]=c[0];data[i+1]=c[1];data[i+2]=c[2];continue;
+      }
+
       if(algo==="Threshold"){const c=closestColor(r,g,b,pal);data[i]=c[0];data[i+1]=c[1];data[i+2]=c[2];continue;}
       const c=closestColor(r,g,b,pal);data[i]=c[0];data[i+1]=c[1];data[i+2]=c[2];
       const er=(r-c[0])*errStr,eg=(g-c[1])*errStr,eb=(b-c[2])*errStr;
@@ -520,6 +600,19 @@ export default function UESCProcessor(){
               {grp==="Modulation"&&(<><Rng label="Frequency" value={dp.frequency} min={0.1} max={4} step={0.05} onChange={v=>setDp(p=>({...p,frequency:v}))}/><Rng label="Depth" value={dp.depth} min={0.1} max={2} step={0.05} onChange={v=>setDp(p=>({...p,depth:v}))}/><Rng label="Line Weight" value={dp.lineWeight} min={0.3} max={3} step={0.1} onChange={v=>setDp(p=>({...p,lineWeight:v}))}/><Sel label="Direction" value={String(dp.direction)} onChange={v=>setDp(p=>({...p,direction:+v}))} opts={[{v:"0",l:"Horizontal"},{v:"1",l:"Vertical"},{v:"2",l:"Diagonal"}]}/></>)}
               {grp==="Noise"&&(<><Rng label="Spread" value={dp.spread} min={0.1} max={3} step={0.05} onChange={v=>setDp(p=>({...p,spread:v}))}/>{ditherAlgo==="Stipple"&&<Rng label="Cell Size" value={dp.cellSize} min={2} max={20} step={1} onChange={v=>setDp(p=>({...p,cellSize:v}))}/>}</>)}
               {grp==="Special"&&(<><Rng label="Frequency" value={dp.frequency} min={0.1} max={4} step={0.05} onChange={v=>setDp(p=>({...p,frequency:v}))}/>{ditherAlgo==="Spiral"&&<Rng label="Arms" value={dp.arms} min={1} max={12} step={1} onChange={v=>setDp(p=>({...p,arms:v}))}/>}{ditherAlgo==="Voronoi"&&(<><Rng label="Cell Size" value={dp.cellSize} min={4} max={40} step={1} onChange={v=>setDp(p=>({...p,cellSize:v}))}/><Rng label="Edge Spread" value={dp.edgeSpread} min={0.1} max={3} step={0.1} onChange={v=>setDp(p=>({...p,edgeSpread:v}))}/><Rng label="Line Weight" value={dp.lineWeight} min={0.3} max={3} step={0.1} onChange={v=>setDp(p=>({...p,lineWeight:v}))}/></>)}</>)}
+              {grp==="Shape"&&(<>
+                {ditherAlgo==="Plus"&&(<>
+                  <Rng label="Plus Size" value={dp.plusSize} min={2} max={20} step={1} onChange={v=>setDp(p=>({...p,plusSize:v}))}/>
+                  <Rng label="Gap" value={dp.plusGap} min={8} max={60} step={1} onChange={v=>setDp(p=>({...p,plusGap:v}))}/>
+                  <Rng label="Thickness" value={dp.plusThickness} min={1} max={8} step={1} onChange={v=>setDp(p=>({...p,plusThickness:v}))}/>
+                </>)}
+                {ditherAlgo==="Numbers"&&(<>
+                  <Rng label="Font Size" value={dp.numFontSize} min={5} max={24} step={1} onChange={v=>setDp(p=>({...p,numFontSize:v}))}/>
+                  <Rng label="Digits / Row" value={dp.numBlockW} min={2} max={10} step={1} onChange={v=>setDp(p=>({...p,numBlockW:v}))}/>
+                  <Rng label="Rows / Block" value={dp.numBlockH} min={2} max={12} step={1} onChange={v=>setDp(p=>({...p,numBlockH:v}))}/>
+                  <Rng label="Block Gap" value={dp.numGap} min={4} max={50} step={1} onChange={v=>setDp(p=>({...p,numGap:v}))}/>
+                </>)}
+              </>)}
             </>)}
           </Sec>
 
