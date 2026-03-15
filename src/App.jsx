@@ -337,7 +337,7 @@ function parseGLB(buffer){
   return group;
 }
 
-function setup3DScene(objectOrGeo,renderW,renderH){
+function setup3DScene(objectOrGeo){
   const scene=new THREE.Scene();
   scene.background=new THREE.Color(0x111111);
 
@@ -349,26 +349,23 @@ function setup3DScene(objectOrGeo,renderW,renderH){
     obj=objectOrGeo;
   }
 
-  // Center and scale
   const box=new THREE.Box3().setFromObject(obj);
   const center=box.getCenter(new THREE.Vector3());
   const size=box.getSize(new THREE.Vector3()).length();
   obj.position.sub(center);
-  const scaleFactor=2/size;
-  obj.scale.multiplyScalar(scaleFactor);
+  obj.scale.multiplyScalar(2/size);
   scene.add(obj);
 
-  // Lights
   scene.add(new THREE.AmbientLight(0x555555));
   const dl=new THREE.DirectionalLight(0xffffff,1);dl.position.set(3,4,5);scene.add(dl);
   const dl2=new THREE.DirectionalLight(0x444466,0.5);dl2.position.set(-3,-2,-3);scene.add(dl2);
 
-  const camera=new THREE.PerspectiveCamera(45,renderW/renderH,0.01,100);
+  const camera=new THREE.PerspectiveCamera(45,4/3,0.01,100);
   camera.position.set(0,1,3.5);camera.lookAt(0,0,0);
 
   const renderer=new THREE.WebGLRenderer({antialias:true,alpha:false});
-  renderer.setSize(renderW,renderH);
   renderer.setPixelRatio(1);
+  renderer.setSize(4,4); // placeholder, resized on first frame
 
   return{scene,camera,renderer};
 }
@@ -407,12 +404,14 @@ export default function UESCProcessor(){
   const threeRef=useRef(null); // {scene,camera,renderer}
   const orbitRef=useRef({theta:0.3,phi:1.2,dist:3.5}); // spherical orbit
   const isOrbiting=useRef(false);const orbitStart=useRef({x:0,y:0,theta:0,phi:0});
+  const viewportRef=useRef(null);
+  const[cam3d,setCam3d]=useState({fov:45,dist:3.5,height:0.5,turntable:false,turnSpeed:0.5});
   const srcRef=useRef(null);const ditherRef=useRef(null);const dispRef=useRef(null);const asciiRef=useRef(null);
   const fileRef=useRef(null);const animRef=useRef(null);const vidRef=useRef(null);const t0Ref=useRef(0);
   const recorderRef=useRef(null);const chunksRef=useRef([]);
 
-  const pRef=useRef({palette,customColors,ditherAlgo,dp,asciiMode,asciiCols,asciiInvert,gfx});
-  pRef.current={palette,customColors,ditherAlgo,dp,asciiMode,asciiCols,asciiInvert,gfx};
+  const pRef=useRef({palette,customColors,ditherAlgo,dp,asciiMode,asciiCols,asciiInvert,gfx,cam3d});
+  pRef.current={palette,customColors,ditherAlgo,dp,asciiMode,asciiCols,asciiInvert,gfx,cam3d};
 
   const loadFile=useCallback((e)=>{const file=e.target?.files?.[0]||e.dataTransfer?.files?.[0];if(!file)return;setErr(null);setImageEl(null);setVideoEl(null);setVideoPlaying(false);setZoom(1);setPan({x:0,y:0});cancelAnimationFrame(animRef.current);cancelAnimationFrame(vidRef.current);
     // Cleanup old 3D
@@ -433,11 +432,12 @@ export default function UESCProcessor(){
           else if(name.endsWith(".glb")){geoOrGroup=parseGLB(ev.target.result);}
           else{setErr("Unsupported 3D format");return;}
 
-          const s=setup3DScene(geoOrGroup,800,600);
+          const s=setup3DScene(geoOrGroup);
           threeRef.current=s;
           orbitRef.current={theta:0.3,phi:1.2,dist:3.5};
           setMediaType("3d");
-          // Render first frame to create imageEl
+          // Render placeholder first frame
+          s.renderer.setSize(800,600);s.camera.aspect=4/3;s.camera.updateProjectionMatrix();
           const o=orbitRef.current;
           s.camera.position.set(o.dist*Math.sin(o.phi)*Math.sin(o.theta),o.dist*Math.cos(o.phi),o.dist*Math.sin(o.phi)*Math.cos(o.theta));
           s.camera.lookAt(0,0,0);
@@ -463,8 +463,28 @@ export default function UESCProcessor(){
     // 3D mode: render scene to get source pixels
     let actualSource=sourceEl;
     if(threeRef.current){
-      const s=threeRef.current,o=orbitRef.current;
-      s.camera.position.set(o.dist*Math.sin(o.phi)*Math.sin(o.theta),o.dist*Math.cos(o.phi),o.dist*Math.sin(o.phi)*Math.cos(o.theta));
+      const s=threeRef.current,o=orbitRef.current,c3=P.cam3d||{};
+      // Resize to viewport
+      const vp=viewportRef.current;
+      const vpW=vp?vp.clientWidth:800, vpH=vp?vp.clientHeight:600;
+      if(s.renderer.domElement.width!==vpW||s.renderer.domElement.height!==vpH){
+        s.renderer.setSize(vpW,vpH);
+        s.camera.aspect=vpW/vpH;
+      }
+      // Camera params
+      const fov=c3.fov||45;
+      if(s.camera.fov!==fov){s.camera.fov=fov;}
+      s.camera.updateProjectionMatrix();
+      const dist=c3.turntable?(c3.dist||3.5):o.dist;
+      const height=c3.height||0.5;
+      // Turntable: override theta with time-based rotation
+      let theta=o.theta, phi=o.phi;
+      if(c3.turntable){
+        theta=time*(c3.turnSpeed||0.5);
+        phi=Math.PI/2-Math.atan2(height,dist);
+        phi=Math.max(0.1,Math.min(Math.PI-0.1,phi));
+      }
+      s.camera.position.set(dist*Math.sin(phi)*Math.sin(theta),dist*Math.cos(phi)+height*0.5,dist*Math.sin(phi)*Math.cos(theta));
       s.camera.lookAt(0,0,0);
       s.renderer.render(s.scene,s.camera);
       actualSource=s.renderer.domElement;
@@ -527,7 +547,7 @@ export default function UESCProcessor(){
     else{if(ascii)ascii.style.display="none";disp.style.display="block";disp.width=w;disp.height=h;const hasG=Object.values(P.gfx).some(v=>typeof v==="object"&&v?.on);if(hasG)applyGlitch(disp.getContext("2d"),disp,dith,P.gfx,time);else disp.getContext("2d").drawImage(dith,0,0);}
   },[getPal]);
 
-  useEffect(()=>{if(!imageEl||videoPlaying)return;t0Ref.current=performance.now();let r=true;const loop=()=>{if(!r)return;renderFrame(imageEl,animate?(performance.now()-t0Ref.current)/1000:0);animRef.current=requestAnimationFrame(loop);};loop();return()=>{r=false;cancelAnimationFrame(animRef.current);};},[imageEl,animate,renderFrame,videoPlaying,palette,customColors,ditherAlgo,dp,asciiMode,asciiCols,asciiInvert,gfx]);
+  useEffect(()=>{if(!imageEl||videoPlaying)return;t0Ref.current=performance.now();let r=true;const loop=()=>{if(!r)return;renderFrame(imageEl,animate?(performance.now()-t0Ref.current)/1000:0);animRef.current=requestAnimationFrame(loop);};loop();return()=>{r=false;cancelAnimationFrame(animRef.current);};},[imageEl,animate,renderFrame,videoPlaying,palette,customColors,ditherAlgo,dp,asciiMode,asciiCols,asciiInvert,gfx,cam3d]);
   useEffect(()=>{if(!videoEl||!videoPlaying)return;videoEl.play().catch(()=>{});t0Ref.current=performance.now();let r=true;const loop=()=>{if(!r)return;if(videoEl.paused||videoEl.ended){setVideoPlaying(false);return;}renderFrame(videoEl,(performance.now()-t0Ref.current)/1000);vidRef.current=requestAnimationFrame(loop);};loop();return()=>{r=false;cancelAnimationFrame(vidRef.current);videoEl.pause();};},[videoEl,videoPlaying,renderFrame]);
 
   const loadGlitchPreset=(k)=>{setGlitchPreset(k);const p=GLITCH_PRESETS[k];const g={...GFX0};for(const key of Object.keys(p)){if(key!=="name"&&typeof p[key]==="object")g[key]={...GFX0[key],...p[key]};}setGfx(g);};
@@ -539,7 +559,7 @@ export default function UESCProcessor(){
   const stopRec=()=>{if(recorderRef.current?.state==="recording")recorderRef.current.stop();};
 
   const onWheel=useCallback((e)=>{e.preventDefault();
-    if(mediaType==="3d"){orbitRef.current.dist=Math.max(0.5,Math.min(20,orbitRef.current.dist*(e.deltaY>0?1.08:0.92)));return;}
+    if(mediaType==="3d"){const nd=Math.max(0.5,Math.min(15,orbitRef.current.dist*(e.deltaY>0?1.08:0.92)));orbitRef.current.dist=nd;setCam3d(p=>({...p,dist:Math.round(nd*10)/10}));return;}
     setZoom(z=>Math.max(0.1,Math.min(10,z*(e.deltaY>0?0.9:1.1))));},[mediaType]);
   const onMouseDown=useCallback((e)=>{
     if(mediaType==="3d"&&e.button===0&&!e.altKey){e.preventDefault();isOrbiting.current=true;orbitStart.current={x:e.clientX,y:e.clientY,theta:orbitRef.current.theta,phi:orbitRef.current.phi};return;}
@@ -618,6 +638,18 @@ export default function UESCProcessor(){
 
           <Sec title="ASCII" defaultOpen={false}><Sel label="Charset" value={asciiMode} onChange={v=>setAsciiMode(v)} opts={Object.keys(CHARSETS).map(k=>({v:k,l:k==="off"?"Off":k.charAt(0).toUpperCase()+k.slice(1)}))}/>{asciiMode!=="off"&&(<><Rng label="Columns" value={asciiCols} min={30} max={200} step={1} onChange={v=>setAsciiCols(v)}/><Tog label="Invert" value={asciiInvert} onChange={setAsciiInvert}/></>)}</Sec>
 
+          {/* 3D CAMERA */}
+          {mediaType==="3d"&&(
+            <Sec title="3D Camera" defaultOpen={true}>
+              <Tog label="Turntable" value={cam3d.turntable} onChange={v=>{setCam3d(p=>({...p,turntable:v}));if(v&&!animate)setAnimate(true);}}/>
+              {cam3d.turntable&&<Rng label="Rotation Speed" value={cam3d.turnSpeed} min={0.05} max={3} step={0.05} onChange={v=>setCam3d(p=>({...p,turnSpeed:v}))}/>}
+              <Rng label="Distance" value={cam3d.dist} min={0.5} max={15} step={0.1} onChange={v=>{setCam3d(p=>({...p,dist:v}));orbitRef.current.dist=v;}}/>
+              <Rng label="Height" value={cam3d.height} min={-3} max={3} step={0.1} onChange={v=>setCam3d(p=>({...p,height:v}))}/>
+              <Rng label="FOV" value={cam3d.fov} min={15} max={120} step={1} suffix={"\u00B0"} onChange={v=>setCam3d(p=>({...p,fov:v}))}/>
+              <div style={{fontSize:8,opacity:0.25,marginTop:4}}>Drag to orbit, scroll to zoom</div>
+            </Sec>
+          )}
+
           {/* GLITCH */}
           <Sec title="Glitch">
             <div style={{display:"flex",flexWrap:"wrap",gap:3,marginBottom:8}}>{Object.entries(GLITCH_PRESETS).map(([k,v])=>(<button key={k} onClick={()=>loadGlitchPreset(k)} style={{padding:"2px 7px",fontSize:8,fontFamily:"inherit",background:glitchPreset===k?"#ccc":"transparent",color:glitchPreset===k?"#0a0a0a":"#888",border:`1px solid ${glitchPreset===k?"#ccc":"#333"}`,borderRadius:2,cursor:"pointer",letterSpacing:1}}>{v.name}</button>))}</div>
@@ -650,7 +682,7 @@ export default function UESCProcessor(){
           <button onClick={()=>{setZoom(1);setPan({x:0,y:0});}} style={{padding:"3px 7px",fontSize:9,fontFamily:"inherit",background:"#0a0a0acc",color:"#666",border:"1px solid #2a2a2a",borderRadius:2,cursor:"pointer"}}>FIT</button>
           <span style={{padding:"3px 7px",fontSize:9,fontFamily:"inherit",background:"#0a0a0acc",color:"#555",border:"1px solid #1a1a1a",borderRadius:2}}>{Math.round(zoom*100)}%</span>
         </div>
-        <div style={{flex:1,overflow:"hidden",cursor:mediaType==="3d"?"move":"grab",background:checkerBg}} onWheel={onWheel} onMouseDown={onMouseDown} onMouseMove={onMouseMove} onMouseUp={onMouseUp} onMouseLeave={onMouseUp}>
+        <div ref={viewportRef} style={{flex:1,overflow:"hidden",cursor:mediaType==="3d"?"move":"grab",background:checkerBg}} onWheel={onWheel} onMouseDown={onMouseDown} onMouseMove={onMouseMove} onMouseUp={onMouseUp} onMouseLeave={onMouseUp}>
           <div style={{width:"100%",height:"100%",display:"flex",alignItems:"center",justifyContent:"center"}}>
             {!imageEl?(<div onClick={()=>fileRef.current?.click()} style={{cursor:"pointer",textAlign:"center",padding:36,border:"1px dashed #2a2a2a",borderRadius:3,maxWidth:380,width:"100%",background:"#0a0a0a"}}><div style={{fontSize:36,marginBottom:10,opacity:0.15}}>{"\u2394"}</div><div style={{fontSize:11,letterSpacing:3,opacity:0.4}}>IMPORT FILE</div><div style={{fontSize:8,opacity:0.15,marginTop:6}}>JPG PNG SVG WebP MP4 WebM OBJ STL GLB</div></div>
             ):(<div style={{transform:`translate(${pan.x}px,${pan.y}px) scale(${zoom})`,transformOrigin:"center center",imageRendering:"pixelated"}}>
