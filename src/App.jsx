@@ -392,7 +392,7 @@ function ColorSwatch({color,onChange,onRemove}){
 // --- MAIN ---
 export default function UESCProcessor(){
   const[imageEl,setImageEl]=useState(null);const[mediaType,setMediaType]=useState(null);const[videoEl,setVideoEl]=useState(null);const[videoPlaying,setVideoPlaying]=useState(false);
-  const[animate,setAnimate]=useState(true);const[showPanel,setShowPanel]=useState(true);const[err,setErr]=useState(null);const[recording,setRecording]=useState(false);const[recFmt,setRecFmt]=useState("webm");const[recDur,setRecDur]=useState(5);const[recProgress,setRecProgress]=useState(0);
+  const[animate,setAnimate]=useState(true);const[showPanel,setShowPanel]=useState(true);const[err,setErr]=useState(null);const[recording,setRecording]=useState(false);const[recFmt,setRecFmt]=useState("webm");const[recDur,setRecDur]=useState(5);const[recProgress,setRecProgress]=useState(0);const[recRes,setRecRes]=useState("1920x1080");
   const[palette,setPalette]=useState("Original");
   const[customColors,setCustomColors]=useState(["#000000","#00ff41"]);
   const[ditherAlgo,setDitherAlgo]=useState("None");
@@ -459,46 +459,44 @@ export default function UESCProcessor(){
 
   const getPal=useCallback((palName,cc)=>{if(palName==="Original")return null;if(palName==="Custom")return cc.map(c=>{if(c.startsWith("#")&&c.length>=7)return[parseInt(c.slice(1,3),16),parseInt(c.slice(3,5),16),parseInt(c.slice(5,7),16)];return[0,0,0];});return PALETTES[palName];},[]);
 
-  const renderFrame=useCallback((sourceEl,time)=>{
-    const P=pRef.current;const src=srcRef.current,dith=ditherRef.current,disp=dispRef.current,ascii=asciiRef.current;if(!src||!dith||!disp)return;
+  const renderFrame=useCallback((sourceEl,time,exportOverride)=>{
+    const P=pRef.current;
+    // Use export canvases if provided, otherwise use display canvases
+    const src=exportOverride?.src||srcRef.current;
+    const dith=exportOverride?.dith||ditherRef.current;
+    const disp=exportOverride?.disp||dispRef.current;
+    const ascii=exportOverride?.ascii||asciiRef.current;
+    if(!src||!dith||!disp)return;
 
     // 3D mode: render scene to get source pixels
     let actualSource=sourceEl;
     if(threeRef.current){
       const s=threeRef.current,o=orbitRef.current,c3=P.cam3d||{};
-      // Resize to viewport
-      const vp=viewportRef.current;
-      const vpW=vp?vp.clientWidth:800, vpH=vp?vp.clientHeight:600;
+      // Resize to target: export res or viewport
+      let vpW,vpH;
+      if(exportOverride){vpW=exportOverride.w;vpH=exportOverride.h;}
+      else{const vp=viewportRef.current;vpW=vp?vp.clientWidth:800;vpH=vp?vp.clientHeight:600;}
       if(s.renderer.domElement.width!==vpW||s.renderer.domElement.height!==vpH){
-        s.renderer.setSize(vpW,vpH);
-        s.camera.aspect=vpW/vpH;
+        s.renderer.setSize(vpW,vpH);s.camera.aspect=vpW/vpH;
       }
-      // Camera params
-      const fov=c3.fov??45;
-      if(s.camera.fov!==fov){s.camera.fov=fov;}
+      const fov=c3.fov??45;if(s.camera.fov!==fov)s.camera.fov=fov;
       s.camera.updateProjectionMatrix();
-      const dist=c3.turntable?(c3.dist??3.5):o.dist;
-      const height=c3.height??0.5;
-      // Turntable: override theta with time-based rotation
-      let theta=o.theta, phi=o.phi;
-      if(c3.turntable){
-        theta=time*(c3.turnSpeed??0.5);
-        phi=Math.PI/2-Math.atan2(height,dist);
-        phi=Math.max(0.1,Math.min(Math.PI-0.1,phi));
-      }
+      const dist=c3.turntable?(c3.dist??3.5):o.dist;const height=c3.height??0.5;
+      let theta=o.theta,phi=o.phi;
+      if(c3.turntable){theta=time*(c3.turnSpeed??0.5);phi=Math.PI/2-Math.atan2(height,dist);phi=Math.max(0.1,Math.min(Math.PI-0.1,phi));}
       s.camera.position.set(dist*Math.sin(phi)*Math.sin(theta),dist*Math.cos(phi)+height*0.5,dist*Math.sin(phi)*Math.cos(theta));
-      s.camera.lookAt(0,0,0);
-      s.renderer.render(s.scene,s.camera);
+      s.camera.lookAt(0,0,0);s.renderer.render(s.scene,s.camera);
       actualSource=s.renderer.domElement;
     }
     if(!actualSource)return;
 
     const ew=actualSource.videoWidth||actualSource.naturalWidth||actualSource.width;
     const eh=actualSource.videoHeight||actualSource.naturalHeight||actualSource.height;if(!ew||!eh)return;
-    // For 3D: use full viewport size. For images/video: clamp to 800*scale
     let w,h;
-    if(threeRef.current){
-      w=ew; h=eh; // already sized to viewport
+    if(exportOverride){
+      w=exportOverride.w;h=exportOverride.h;
+    } else if(threeRef.current){
+      w=ew;h=eh;
     } else {
       const scale=P.dp.scale??1,maxSz=Math.round(800*scale),sc=Math.min(1,maxSz/Math.max(ew,eh))*scale;
       w=Math.max(1,Math.round(ew*Math.min(sc,scale)));h=Math.max(1,Math.round(eh*Math.min(sc,scale)));
@@ -563,8 +561,8 @@ export default function UESCProcessor(){
     }
 
     const chars=CHARSETS[P.asciiMode];
-    if(chars&&ascii){let cs=chars;if(P.asciiInvert)cs=cs.split("").reverse().join("");renderAscii(dith,ascii,cs,P.asciiCols);const hasG=Object.values(P.gfx).some(v=>typeof v==="object"&&v?.on);if(hasG){const tc=document.createElement("canvas");tc.width=ascii.width;tc.height=ascii.height;tc.getContext("2d").drawImage(ascii,0,0);applyGlitch(ascii.getContext("2d"),ascii,tc,P.gfx,time);}disp.style.display="none";ascii.style.display="block";}
-    else{if(ascii)ascii.style.display="none";disp.style.display="block";disp.width=w;disp.height=h;const hasG=Object.values(P.gfx).some(v=>typeof v==="object"&&v?.on);if(hasG)applyGlitch(disp.getContext("2d"),disp,dith,P.gfx,time);else disp.getContext("2d").drawImage(dith,0,0);}
+    if(chars&&ascii){let cs=chars;if(P.asciiInvert)cs=cs.split("").reverse().join("");renderAscii(dith,ascii,cs,P.asciiCols);const hasG=Object.values(P.gfx).some(v=>typeof v==="object"&&v?.on);if(hasG){const tc=document.createElement("canvas");tc.width=ascii.width;tc.height=ascii.height;tc.getContext("2d").drawImage(ascii,0,0);applyGlitch(ascii.getContext("2d"),ascii,tc,P.gfx,time);}if(!exportOverride){disp.style.display="none";ascii.style.display="block";}}
+    else{if(!exportOverride){if(ascii)ascii.style.display="none";disp.style.display="block";}disp.width=w;disp.height=h;const hasG=Object.values(P.gfx).some(v=>typeof v==="object"&&v?.on);if(hasG)applyGlitch(disp.getContext("2d"),disp,dith,P.gfx,time);else disp.getContext("2d").drawImage(dith,0,0);}
   },[getPal]);
 
   useEffect(()=>{if(!imageEl||videoPlaying||recording)return;t0Ref.current=performance.now();let r=true;const loop=()=>{if(!r)return;renderFrame(imageEl,animate?(performance.now()-t0Ref.current)/1000:0);animRef.current=requestAnimationFrame(loop);};loop();return()=>{r=false;cancelAnimationFrame(animRef.current);};},[imageEl,animate,renderFrame,videoPlaying,recording,palette,customColors,ditherAlgo,dp,asciiMode,asciiCols,asciiInvert,gfx,cam3d]);
@@ -575,10 +573,14 @@ export default function UESCProcessor(){
   const loadMarathonPreset=(name)=>{const p=MARATHON_PRESETS[name];if(!p)return;setPalette(p.palette);setDitherAlgo(p.dither);setDp({...DP0,...p.dp});setGfx(structuredClone(p.gfx));setGlitchPreset("custom");};
 
   const doExportPng=()=>{const c=asciiMode!=="off"?asciiRef.current:dispRef.current;if(!c||!c.width)return;const link=document.createElement("a");link.download=`UESC_${Date.now()}.png`;link.href=c.toDataURL("image/png");document.body.appendChild(link);link.click();document.body.removeChild(link);};
-  // --- OFFLINE FRAME-BY-FRAME RENDER (no dropped frames) ---
+  // --- OFFLINE FRAME-BY-FRAME RENDER (dedicated offscreen canvases) ---
   const startRec=()=>{
     const sourceEl=imageEl;if(!sourceEl)return;
-    const c=asciiMode!=="off"?asciiRef.current:dispRef.current;if(!c)return;
+
+    // Parse resolution
+    const [rw,rh]=recRes.split("x").map(Number);
+    if(!rw||!rh)return;
+
     // Determine format
     const fmt=recFmt;let mime,ext;
     if(fmt==="mp4"){
@@ -589,28 +591,38 @@ export default function UESCProcessor(){
       mime=MediaRecorder.isTypeSupported("video/webm;codecs=vp9")?"video/webm;codecs=vp9":"video/webm";ext="webm";
     }
 
+    // Create dedicated offscreen canvases at export resolution
+    const ctxOpts={willReadFrequently:true};
+    const exSrc=document.createElement("canvas");exSrc.width=rw;exSrc.height=rh;exSrc.getContext("2d",ctxOpts);
+    const exDith=document.createElement("canvas");exDith.width=rw;exDith.height=rh;exDith.getContext("2d",ctxOpts);
+    const exDisp=document.createElement("canvas");exDisp.width=rw;exDisp.height=rh;exDisp.getContext("2d",ctxOpts);
+    const exAscii=document.createElement("canvas");exAscii.width=rw;exAscii.height=rh;exAscii.getContext("2d",ctxOpts);
+
+    // The final output canvas - opaque to prevent alpha color shifts in encoding
+    const outCanvas=document.createElement("canvas");outCanvas.width=rw;outCanvas.height=rh;
+    const outCtx=outCanvas.getContext("2d",{alpha:false,willReadFrequently:true});
+
     setRecording(true);setRecProgress(0);
     chunksRef.current=[];
 
-    // Use captureStream(0) = manual frame mode
-    const stream=c.captureStream(0);
+    const stream=outCanvas.captureStream(0);
     const track=stream.getVideoTracks()[0];
-    const mr=new MediaRecorder(stream,{mimeType:mime,videoBitsPerSecond:12e6});
+    const mr=new MediaRecorder(stream,{mimeType:mime,videoBitsPerSecond:16e6});
     mr.ondataavailable=(e)=>{if(e.data.size>0)chunksRef.current.push(e.data);};
     mr.onstop=()=>{
       const blob=new Blob(chunksRef.current,{type:mime});
       const url=URL.createObjectURL(blob);
-      const a=document.createElement("a");a.href=url;a.download=`UESC_${Date.now()}.${ext}`;
+      const a=document.createElement("a");a.href=url;a.download=`UESC_${rw}x${rh}_${Date.now()}.${ext}`;
       document.body.appendChild(a);a.click();document.body.removeChild(a);
       URL.revokeObjectURL(url);setRecording(false);setRecProgress(0);
     };
     mr.start();
     recorderRef.current=mr;
 
-    // Offline render loop: render each frame at exact time, then advance
     const fps=60;
     const totalFrames=Math.round(recDur*fps);
     let frame=0;
+    const expOverride={src:exSrc,dith:exDith,disp:exDisp,ascii:exAscii,w:rw,h:rh};
 
     const renderNext=()=>{
       if(frame>=totalFrames||!recorderRef.current||recorderRef.current.state!=="recording"){
@@ -618,20 +630,18 @@ export default function UESCProcessor(){
         return;
       }
       const t=frame/fps;
-      // Render this exact frame
-      if(threeRef.current){
-        renderFrame(sourceEl,t);
-      } else {
-        renderFrame(sourceEl,t);
-      }
-      // Signal the stream to capture this frame
+      renderFrame(sourceEl,t,expOverride);
+
+      // Composite final output: pick whichever canvas has the result
+      const chars=CHARSETS[pRef.current.asciiMode];
+      const resultCanvas=(chars)?exAscii:exDisp;
+      outCtx.drawImage(resultCanvas,0,0,rw,rh);
+
       if(track.requestFrame)track.requestFrame();
       frame++;
       setRecProgress(Math.round(frame/totalFrames*100));
-      // Use setTimeout(0) to let the browser breathe + encoder catch up
       setTimeout(renderNext,0);
     };
-    // Start after a tick so MediaRecorder is ready
     setTimeout(renderNext,100);
   };
   const stopRec=()=>{
@@ -757,8 +767,16 @@ export default function UESCProcessor(){
         </div>
         <div style={{padding:"6px 12px",borderTop:"1px solid #1a1a1a",display:"flex",flexDirection:"column",gap:4}}>
           {recording&&<div style={{width:"100%",height:3,background:"#222",borderRadius:2,overflow:"hidden"}}><div style={{width:`${recProgress}%`,height:"100%",background:"#ff4040",transition:"width 0.1s"}}/></div>}
-          {recording&&<div style={{fontSize:8,color:"#888",textAlign:"center"}}>{recProgress}% — Rendering {recDur}s @ 60fps ({Math.round(recDur*60)} frames)</div>}
-          {!recording&&<Rng label="Duration" value={recDur} min={1} max={30} step={0.5} suffix="s" onChange={v=>setRecDur(v)}/>}
+          {recording&&<div style={{fontSize:8,color:"#888",textAlign:"center"}}>{recProgress}% — Rendering {recRes} {recDur}s @ 60fps</div>}
+          {!recording&&<>
+            <Rng label="Duration" value={recDur} min={1} max={30} step={0.5} suffix="s" onChange={v=>setRecDur(v)}/>
+            <div style={{display:"flex",gap:4,alignItems:"center",marginBottom:2}}>
+              <span style={{fontSize:9,opacity:0.4,letterSpacing:"0.05em"}}>RES</span>
+              {["3840x2160","1920x1080","1280x720","800x600"].map(r=>(
+                <button key={r} onClick={()=>setRecRes(r)} style={{padding:"2px 5px",fontSize:8,fontFamily:"inherit",background:recRes===r?"#ccc":"transparent",color:recRes===r?"#0a0a0a":"#666",border:`1px solid ${recRes===r?"#ccc":"#333"}`,borderRadius:2,cursor:"pointer"}}>{r.split("x")[1]}p</button>
+              ))}
+            </div>
+          </>}
           <div style={{display:"flex",gap:4,alignItems:"center"}}>
             <button onClick={doExportPng} disabled={!imageEl||recording} style={{flex:1,padding:"6px 0",fontSize:9,fontFamily:"inherit",letterSpacing:1,fontWeight:"bold",background:imageEl&&!recording?"#ccc":"#222",color:"#0a0a0a",border:"none",borderRadius:2,cursor:imageEl&&!recording?"pointer":"default",opacity:imageEl&&!recording?1:0.3}}>PNG</button>
             <select value={recFmt} onChange={e=>setRecFmt(e.target.value)} disabled={recording} style={{padding:"5px 3px",fontSize:9,fontFamily:"inherit",background:"#111",color:"#aaa",border:"1px solid #333",borderRadius:2,cursor:"pointer",outline:"none"}}>
