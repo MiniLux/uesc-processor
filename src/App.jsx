@@ -35,7 +35,7 @@ const DITHER_ALGOS = {
   "Threshold":{g:"Basic"},
 };
 
-const DP0 = {gamma:1,bias:0,invert:false,errStr:1,serpentine:false,spread:1,htAngle:0,dotGain:0,dotSize:1,lineWeight:1,frequency:1,depth:1,direction:0,rotation:0,cellSize:8,arms:5,edgeSpread:1,scale:1,brightness:0,contrast:0,colorMode:"rgb",posterize:6,solarizeT:128,duoH:"#000000",duoL:"#00ff41",sharpen:0,blur:0,dpi:1,plusSize:6,plusGap:16,plusThickness:2,numBlockW:5,numBlockH:6,numFontSize:10,numGap:20};
+const DP0 = {gamma:1,bias:0,invert:false,errStr:1,serpentine:false,spread:1,htAngle:0,dotGain:0,dotSize:1,lineWeight:1,frequency:1,depth:1,direction:0,rotation:0,cellSize:8,arms:5,edgeSpread:1,scale:1,brightness:0,contrast:0,colorMode:"rgb",posterize:6,solarizeT:128,duoH:"#000000",duoL:"#00ff41",sharpen:0,blur:0,dpi:1,plusSize:6,plusGap:16,plusThickness:2,numBlockW:5,numBlockH:6,numFontSize:10,numGap:20,autoPalSize:8};
 
 const MARATHON_PRESETS = {
   "Marathon Green":{palette:"Marathon Green",dither:"Bayer 4x4",dp:{...DP0,spread:0.8},gfx:{scanlines:{on:true,gap:2,opacity:0.4,speed:0},glitch:{on:true,intensity:0.15,blockSize:8,speed:0.5},rgbShift:{on:true,amount:3,angle:0},noise:{on:true,amount:0.08,speed:0.3},pixelate:{on:false,size:1},vignette:{on:true,strength:0.5},crt:{on:false,curvature:0.2},blockGlitch:{on:false,count:10,maxSize:50},chromatic:{on:false,amount:3},jitter:{on:false,amount:3},colorCycle:{on:false,speed:1},solarize:{on:false,threshold:128,speed:0.5}}},
@@ -85,6 +85,60 @@ function preProcess(data,w,h,blur,sharpen){
   return out;
 }
 
+// --- ADAPTIVE PALETTE (median cut) ---
+function extractPalette(data, numColors) {
+  // Sample pixels (skip every N for speed on large images)
+  const step = Math.max(1, Math.floor(data.length / 4 / 10000)) * 4;
+  const pixels = [];
+  for (let i = 0; i < data.length; i += step) {
+    if (data[i + 3] > 128) pixels.push([data[i], data[i + 1], data[i + 2]]);
+  }
+  if (pixels.length === 0) return [[0,0,0],[255,255,255]];
+
+  // Median cut
+  function rangeOf(bucket) {
+    let rMin=255,rMax=0,gMin=255,gMax=0,bMin=255,bMax=0;
+    for (const p of bucket) {
+      if(p[0]<rMin)rMin=p[0];if(p[0]>rMax)rMax=p[0];
+      if(p[1]<gMin)gMin=p[1];if(p[1]>gMax)gMax=p[1];
+      if(p[2]<bMin)bMin=p[2];if(p[2]>bMax)bMax=p[2];
+    }
+    return { rRange: rMax-rMin, gRange: gMax-gMin, bRange: bMax-bMin };
+  }
+
+  function avgColor(bucket) {
+    let r=0,g=0,b=0;
+    for (const p of bucket) { r+=p[0]; g+=p[1]; b+=p[2]; }
+    const n=bucket.length;
+    return [Math.round(r/n), Math.round(g/n), Math.round(b/n)];
+  }
+
+  let buckets = [pixels];
+  while (buckets.length < numColors) {
+    // Find bucket with largest range
+    let maxRange = 0, maxIdx = 0;
+    for (let i = 0; i < buckets.length; i++) {
+      if (buckets[i].length < 2) continue;
+      const { rRange, gRange, bRange } = rangeOf(buckets[i]);
+      const range = Math.max(rRange, gRange, bRange);
+      if (range > maxRange) { maxRange = range; maxIdx = i; }
+    }
+    if (maxRange === 0) break;
+    const bucket = buckets[maxIdx];
+    const { rRange, gRange, bRange } = rangeOf(bucket);
+    // Sort by channel with largest range
+    const ch = rRange >= gRange && rRange >= bRange ? 0 : gRange >= bRange ? 1 : 2;
+    bucket.sort((a, b) => a[ch] - b[ch]);
+    const mid = Math.floor(bucket.length / 2);
+    buckets.splice(maxIdx, 1, bucket.slice(0, mid), bucket.slice(mid));
+  }
+  // Average each bucket
+  const palette = buckets.filter(b => b.length > 0).map(avgColor);
+  // Sort by luminance
+  palette.sort((a, b) => (a[0]*0.299+a[1]*0.587+a[2]*0.114) - (b[0]*0.299+b[1]*0.587+b[2]*0.114));
+  return palette;
+}
+
 function ditherImage(srcData,w,h,algo,palette,p,offsetX,offsetY){
   const raw=preProcess(srcData,w,h,p.blur||0,p.sharpen||0);
   const data=new Uint8ClampedArray(raw);
@@ -113,8 +167,8 @@ function ditherImage(srcData,w,h,algo,palette,p,offsetX,offsetY){
   }
   if(algo==="None")return data;
 
-  // If Original palette selected with a dither algo, default to 1-bit B&W
-  const pal=palette||[[0,0,0],[255,255,255]];
+  // If no palette provided, extract adaptive palette from source image
+  const pal=palette||extractPalette(data,p.autoPalSize||8);
   const errs=new Float32Array(w*h*3);
   const dpiS=Math.max(0.25,dpi);
   const rotRad=rotation*Math.PI/180,cosR=Math.cos(rotRad),sinR=Math.sin(rotRad);
@@ -731,6 +785,7 @@ export default function UESCProcessor(){
           {/* DITHER */}
           <Sec title="Dither"><Sel label="Algorithm" value={ditherAlgo} onChange={v=>setDitherAlgo(v)} opts={Object.entries(DITHER_ALGOS).map(([k,v])=>({v:k,l:v.g==="Off"?k:`${k} [${v.g}]`}))}/>
             {ditherAlgo!=="None"&&(<>
+              {palette==="Original"&&<Rng label="Auto Palette Colors" value={dp.autoPalSize} min={2} max={32} step={1} onChange={v=>setDp(p=>({...p,autoPalSize:v}))}/>}
               <Rng label="Scale" value={dp.scale} min={0.25} max={2} step={0.05} suffix="x" onChange={v=>setDp(p=>({...p,scale:v}))}/>
               <Rng label="DPI Scale" value={dp.dpi} min={0.25} max={4} step={0.05} suffix="x" onChange={v=>setDp(p=>({...p,dpi:v}))}/>
               <Rng label="Brightness" value={dp.brightness} min={-50} max={50} step={1} onChange={v=>setDp(p=>({...p,brightness:v}))}/>
