@@ -46,7 +46,7 @@ const MARATHON_PRESETS = {
   "Leela Neon":{palette:"Leela Pink",dither:"Halftone",dp:{...DP0,gamma:1.1,htAngle:45,dotGain:10,dotSize:1.2,brightness:5,contrast:5},gfx:{scanlines:{on:true,gap:2,opacity:0.3,speed:0.1},glitch:{on:true,intensity:0.2,blockSize:8,speed:0.6},rgbShift:{on:true,amount:4,angle:60},noise:{on:true,amount:0.08,speed:0.4},pixelate:{on:false,size:1},vignette:{on:true,strength:0.5},crt:{on:false,curvature:0.15},blockGlitch:{on:false,count:8,maxSize:40},chromatic:{on:true,amount:4},jitter:{on:false,amount:2},colorCycle:{on:false,speed:1},solarize:{on:false,threshold:128,speed:0.5}}},
 };
 
-const GFX0 = {scanlines:{on:false,gap:2,opacity:0.3,speed:0},glitch:{on:false,intensity:0.15,blockSize:8,speed:0.5},rgbShift:{on:false,amount:3,angle:0,speed:0.5},noise:{on:false,amount:0.06,speed:0.3},pixelate:{on:false,size:2},vignette:{on:false,strength:0.4},crt:{on:false,curvature:0.2},blockGlitch:{on:false,count:10,maxSize:50,speed:0.5},chromatic:{on:false,amount:3,speed:0.5},jitter:{on:false,amount:3,speed:1},colorCycle:{on:false,speed:1},solarize:{on:false,threshold:128,speed:0.5},offset:{on:false,speedX:0.5,speedY:0,amount:50,direction:0},multicolor:{on:false,patchSize:20,speed:0.5,shape:0},coords:{on:false,density:50,threshold:40,fontSize:9,speed:0.3}};
+const GFX0 = {scanlines:{on:false,gap:2,opacity:0.3,speed:0},glitch:{on:false,intensity:0.15,blockSize:8,speed:0.5},rgbShift:{on:false,amount:3,angle:0,speed:0.5},noise:{on:false,amount:0.06,speed:0.3},pixelate:{on:false,size:2},vignette:{on:false,strength:0.4},crt:{on:false,curvature:0.2},blockGlitch:{on:false,count:10,maxSize:50,speed:0.5},chromatic:{on:false,amount:3,speed:0.5},jitter:{on:false,amount:3,speed:1},colorCycle:{on:false,speed:1},solarize:{on:false,threshold:128,speed:0.5},offset:{on:false,speedX:0.5,speedY:0,amount:50,direction:0},multicolor:{on:false,patchSize:20,speed:0.5,shape:0},coords:{on:false,density:50,threshold:40,fontSize:9,speed:0.3,color:"#ffffff",colorMode:0,font:"'Courier New',monospace",bgOn:false,bgColor:"#000000"}};
 const GLITCH_PRESETS = {
   off:{name:"OFF",...GFX0},
   marathon:{name:"MARATHON",...GFX0,scanlines:{on:true,gap:2,opacity:0.35,speed:0},glitch:{on:true,intensity:0.12,blockSize:8,speed:0.4},rgbShift:{on:true,amount:3,angle:0},noise:{on:true,amount:0.06,speed:0.3},vignette:{on:true,strength:0.45}},
@@ -636,26 +636,49 @@ function applyGlitch(ctx,canvas,src,fx,t,pal,mcSvgMask){
 
     // Draw coordinate labels
     ctx.save();
-    ctx.font=`${fSz}px 'Courier New',monospace`;
+    const coordFont=fx.coords.font||"'Courier New',monospace";
+    ctx.font=`${fSz}px ${coordFont}`;
     ctx.textBaseline="middle";
+    const coordColorMode=fx.coords.colorMode??0; // 0=fixed,1=adaptive,2=palette
+    const coordColor=fx.coords.color||"#ffffff";
+    const ccR=parseInt(coordColor.slice(1,3),16)||200;
+    const ccG=parseInt(coordColor.slice(3,5),16)||200;
+    const ccB=parseInt(coordColor.slice(5,7),16)||200;
+    const coordBgOn=fx.coords.bgOn??false;
+    const coordBgColor=fx.coords.bgColor||"#000000";
     for(const pt of points){
-      // Generate pseudo-random coordinate number seeded by position+time
       const seed1=Math.abs(Math.sin(pt.x*73.17+pt.y*311.7+Math.floor(ct*2)*47.1)*43758.5453);
       const num=((seed1*100)%100).toFixed(3);
-      // Alpha based on edge strength
       const alpha=Math.min(1,pt.mag/200);
-      // Pick color from pixel at that location
       const pi=(pt.y*w+pt.x)*4;
-      const pr=d[pi],pg=d[pi+1],pb=d[pi+2];
-      const pixLum=pr*0.299+pg*0.587+pb*0.114;
-      // Use white if pixel is dark, else use pixel color brightened
-      if(pixLum>30){
-        ctx.fillStyle=`rgba(${Math.min(255,pr+80)},${Math.min(255,pg+80)},${Math.min(255,pb+80)},${alpha})`;
+
+      // Draw background pill behind text
+      if(coordBgOn){
+        const tw=ctx.measureText(num).width;
+        const pad=2;
+        ctx.fillStyle=coordBgColor;
+        ctx.fillRect(pt.x+1,pt.y-fSz/2-pad,tw+pad*2+2,fSz+pad*2);
+      }
+
+      if(coordColorMode===1){
+        // Adaptive: use pixel color brightened
+        const pr=d[pi],pg=d[pi+1],pb=d[pi+2];
+        const pixLum=pr*0.299+pg*0.587+pb*0.114;
+        if(pixLum>30){
+          ctx.fillStyle=`rgba(${Math.min(255,pr+80)},${Math.min(255,pg+80)},${Math.min(255,pb+80)},${alpha})`;
+        } else {
+          ctx.fillStyle=`rgba(${ccR},${ccG},${ccB},${alpha*0.7})`;
+        }
+      } else if(coordColorMode===2&&pal&&pal.length>0){
+        // Palette random
+        const pci=Math.floor(Math.abs(Math.sin(pt.x*17.3+pt.y*91.1)*43758.5)%pal.length);
+        const pc=pal[pci];
+        ctx.fillStyle=`rgba(${pc[0]},${pc[1]},${pc[2]},${alpha})`;
       } else {
-        ctx.fillStyle=`rgba(200,200,200,${alpha*0.7})`;
+        // Fixed color
+        ctx.fillStyle=`rgba(${ccR},${ccG},${ccB},${alpha})`;
       }
       ctx.fillText(num,pt.x+3,pt.y);
-      // Small dot at the point
       ctx.fillRect(pt.x-1,pt.y-1,2,2);
     }
     ctx.restore();
@@ -1362,6 +1385,36 @@ export default function UESCProcessor(){
               <Rng label="Edge Threshold" value={gfx.coords?.threshold??40} min={5} max={150} step={1} onChange={v=>setFx("coords","threshold",v)}/>
               <Rng label="Font Size" value={gfx.coords?.fontSize??9} min={5} max={24} step={1} onChange={v=>setFx("coords","fontSize",v)}/>
               <Rng label="Speed" value={gfx.coords?.speed??0.3} min={0} max={3} step={0.1} onChange={v=>setFx("coords","speed",v)}/>
+              <Sel label="Color Mode" value={String(gfx.coords?.colorMode??0)} onChange={v=>setFx("coords","colorMode",+v)} opts={[{v:"0",l:"Fixed"},{v:"1",l:"Adaptive"},{v:"2",l:"Palette"}]}/>
+              {(gfx.coords?.colorMode??0)===0&&<div style={{display:"flex",alignItems:"center",gap:6,marginBottom:5}}>
+                <span style={{...LBL}}>Color</span>
+                <input type="color" value={gfx.coords?.color||"#ffffff"} onChange={e=>setFx("coords","color",e.target.value)} style={{width:24,height:16,border:"1px solid #333",borderRadius:2,cursor:"pointer",padding:0,background:"none"}}/>
+                <span style={{fontSize:9,fontFamily:"'Courier New',monospace",color:"#666"}}>{gfx.coords?.color||"#ffffff"}</span>
+              </div>}
+              <Sel label="Font" value={gfx.coords?.font||"'Courier New',monospace"} onChange={v=>setFx("coords","font",v)} opts={[
+                {v:"'Courier New',monospace",l:"Courier New"},
+                {v:"monospace",l:"Monospace"},
+                {v:"'Arial',sans-serif",l:"Arial"},
+                {v:"'Helvetica',sans-serif",l:"Helvetica"},
+                {v:"'Georgia',serif",l:"Georgia"},
+                {v:"'Times New Roman',serif",l:"Times New Roman"},
+                {v:"'Verdana',sans-serif",l:"Verdana"},
+                {v:"'Impact',sans-serif",l:"Impact"},
+                {v:"serif",l:"Serif"},
+                {v:"sans-serif",l:"Sans-Serif"},
+                {v:"cursive",l:"Cursive"},
+                {v:"fantasy",l:"Fantasy"},
+              ]}/>
+              <div style={{marginBottom:5}}>
+                <div style={{...LBL,marginBottom:2}}>Custom Font Name</div>
+                <input type="text" value={gfx.coords?.font||""} onChange={e=>setFx("coords","font",e.target.value)} style={{width:"100%",padding:"3px 5px",background:"#0a0a0a",border:"1px solid #2a2a2a",color:"#666",fontFamily:"'Courier New',monospace",fontSize:9,borderRadius:2,outline:"none"}} placeholder="Any CSS font name"/>
+              </div>
+              <Tog label="Text Background" value={gfx.coords?.bgOn??false} onChange={v=>setFx("coords","bgOn",v)}/>
+              {(gfx.coords?.bgOn)&&<div style={{display:"flex",alignItems:"center",gap:6,marginBottom:5}}>
+                <span style={{...LBL}}>Bg Color</span>
+                <input type="color" value={gfx.coords?.bgColor||"#000000"} onChange={e=>setFx("coords","bgColor",e.target.value)} style={{width:24,height:16,border:"1px solid #333",borderRadius:2,cursor:"pointer",padding:0,background:"none"}}/>
+                <span style={{fontSize:9,fontFamily:"'Courier New',monospace",color:"#666"}}>{gfx.coords?.bgColor||"#000000"}</span>
+              </div>}
             </>}
           </Sec>
 
