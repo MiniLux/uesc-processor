@@ -782,7 +782,7 @@ export default function UESCProcessor(){
       if(name.endsWith(".obj"))reader.readAsText(file);
       else reader.readAsArrayBuffer(file);
     }
-    else if(isVideo){const url=URL.createObjectURL(file);const v=document.createElement("video");v.muted=true;v.loop=true;v.playsInline=true;v.onloadeddata=()=>{setVideoEl(v);setMediaType("video");const tc=document.createElement("canvas");tc.width=v.videoWidth;tc.height=v.videoHeight;tc.getContext("2d").drawImage(v,0,0);const fi=new Image();fi.onload=()=>setImageEl(fi);fi.src=tc.toDataURL();};v.onerror=()=>{setErr("Video load failed");URL.revokeObjectURL(url);};v.src=url;}
+    else if(isVideo){const url=URL.createObjectURL(file);const v=document.createElement("video");v.muted=true;v.loop=true;v.playsInline=true;v.onloadeddata=()=>{setVideoEl(v);setMediaType("video");if(v.duration&&isFinite(v.duration))setRecDur(Math.round(v.duration*2)/2);const tc=document.createElement("canvas");tc.width=v.videoWidth;tc.height=v.videoHeight;tc.getContext("2d").drawImage(v,0,0);const fi=new Image();fi.onload=()=>setImageEl(fi);fi.src=tc.toDataURL();};v.onerror=()=>{setErr("Video load failed");URL.revokeObjectURL(url);};v.src=url;}
     else{const reader=new FileReader();reader.onload=(ev)=>{const durl=ev.target.result;if(isSvg){const si=new Image();si.onload=()=>{const rc=document.createElement("canvas");rc.width=si.naturalWidth||800;rc.height=si.naturalHeight||600;rc.getContext("2d").drawImage(si,0,0,rc.width,rc.height);const fi=new Image();fi.onload=()=>{setImageEl(fi);setMediaType("image");};fi.src=rc.toDataURL("image/png");};si.onerror=()=>setErr("SVG load failed");si.src=durl;}else{const img=new Image();img.onload=()=>{setImageEl(img);setMediaType("image");};img.onerror=()=>setErr("Image load failed");img.src=durl;}};reader.readAsDataURL(file);}
     if(e.target?.value!==undefined)e.target.value="";
   },[]);
@@ -940,13 +940,14 @@ export default function UESCProcessor(){
   const doExportPng=()=>{const c=asciiMode!=="off"?asciiRef.current:dispRef.current;if(!c||!c.width)return;const link=document.createElement("a");link.download=`UESC_${Date.now()}.png`;link.href=c.toDataURL("image/png");document.body.appendChild(link);link.click();document.body.removeChild(link);};
   // --- OFFLINE FRAME-BY-FRAME RENDER (dedicated offscreen canvases) ---
   const startRec=async()=>{
-    const sourceEl=imageEl;if(!sourceEl)return;
+    const isVideo=mediaType==="video"&&videoEl;
+    const sourceEl=imageEl;if(!sourceEl&&!isVideo)return;
 
     // Parse max resolution and fit to source aspect ratio
     const [maxW,maxH]=recRes.split("x").map(Number);
     if(!maxW||!maxH)return;
-    const srcW=sourceEl.videoWidth||sourceEl.naturalWidth||sourceEl.width;
-    const srcH=sourceEl.videoHeight||sourceEl.naturalHeight||sourceEl.height;
+    const srcW=isVideo?videoEl.videoWidth:(sourceEl.videoWidth||sourceEl.naturalWidth||sourceEl.width);
+    const srcH=isVideo?videoEl.videoHeight:(sourceEl.videoHeight||sourceEl.naturalHeight||sourceEl.height);
     const srcAspect=srcW/srcH;
     const vpEl=viewportRef.current;
     const aspect=threeRef.current?(vpEl?vpEl.clientWidth/vpEl.clientHeight:4/3):srcAspect;
@@ -954,6 +955,10 @@ export default function UESCProcessor(){
     if(aspect>=maxW/maxH){rw=maxW;rh=Math.round(maxW/aspect);}
     else{rh=maxH;rw=Math.round(maxH*aspect);}
     rw=rw-(rw%2);rh=rh-(rh%2);
+
+    // For video: clamp export duration to video duration
+    const vidDuration=isVideo?videoEl.duration:0;
+    const exportDur=isVideo?Math.min(recDur,vidDuration||recDur):recDur;
 
     // Determine format
     const fmt=recFmt;let mime,ext;
@@ -974,6 +979,8 @@ export default function UESCProcessor(){
     const outCanvas=document.createElement("canvas");outCanvas.width=rw;outCanvas.height=rh;
     const outCtx=outCanvas.getContext("2d",{alpha:false,willReadFrequently:true});
 
+    // Stop video playback if running
+    if(isVideo){setVideoPlaying(false);videoEl.pause();}
     setRecording(true);setRecProgress(0);
     chunksRef.current=[];
 
@@ -990,7 +997,7 @@ export default function UESCProcessor(){
         audioDest=audioCtx.createMediaStreamDestination();
         audioSource=audioCtx.createBufferSource();
         audioSource.buffer=audioBuf;
-        audioSource.loop=audioBuf.duration<recDur; // loop if audio shorter than video
+        audioSource.loop=audioBuf.duration<exportDur;
         audioSource.connect(audioDest);
       }catch(e){setErr("Audio decode failed: "+e.message);audioCtx=null;}
     }
@@ -1015,18 +1022,31 @@ export default function UESCProcessor(){
     recorderRef.current=mr;
     if(audioSource)audioSource.start(0);
 
-    const totalFrames=Math.round(recDur*fps);
+    const totalFrames=Math.round(exportDur*fps);
     let frame=0;
     const expOverride={src:exSrc,dith:exDith,disp:exDisp,ascii:exAscii,w:rw,h:rh};
     const recStartTime=performance.now();
 
-    const renderNext=()=>{
+    // Helper: seek video to time and wait
+    const seekTo=(time2)=>new Promise((resolve)=>{
+      const onSeeked=()=>{videoEl.removeEventListener("seeked",onSeeked);clearTimeout(to);resolve();};
+      const to=setTimeout(()=>{videoEl.removeEventListener("seeked",onSeeked);resolve();},500);
+      videoEl.addEventListener("seeked",onSeeked);
+      videoEl.currentTime=time2;
+    });
+
+    const renderNext=async()=>{
       if(frame>=totalFrames||!recorderRef.current||recorderRef.current.state!=="recording"){
         if(recorderRef.current?.state==="recording")recorderRef.current.stop();
         return;
       }
       const t=frame/fps;
-      renderFrame(sourceEl,t,expOverride);
+      if(isVideo){
+        await seekTo(t);
+        renderFrame(videoEl,t,expOverride);
+      } else {
+        renderFrame(sourceEl,t,expOverride);
+      }
       const chars=CHARSETS[pRef.current.asciiMode];
       const resultCanvas=(chars)?exAscii:exDisp;
       outCtx.drawImage(resultCanvas,0,0,rw,rh);
@@ -1036,6 +1056,8 @@ export default function UESCProcessor(){
       const delay=Math.max(0,expectedTime-performance.now());
       setTimeout(renderNext,delay);
     };
+    // Seek to start for video
+    if(isVideo)await seekTo(0);
     setTimeout(renderNext,100);
   };
   const stopRec=()=>{
@@ -1224,7 +1246,7 @@ export default function UESCProcessor(){
           {recording&&<div style={{width:"100%",height:3,background:"#222",borderRadius:2,overflow:"hidden"}}><div style={{width:`${recProgress}%`,height:"100%",background:"#ff4040",transition:"width 0.1s"}}/></div>}
           {recording&&<div style={{fontSize:8,color:"#888",textAlign:"center"}}>{recProgress}% — Rendering {recDur}s @ {recFps}fps</div>}
           {!recording&&<>
-            <Rng label="Duration" value={recDur} min={1} max={30} step={0.5} suffix="s" onChange={v=>setRecDur(v)}/>
+            <Rng label={videoEl?`Duration (video: ${Math.round(videoEl.duration*10)/10}s)`:"Duration"} value={recDur} min={0.5} max={videoEl?Math.ceil(videoEl.duration):30} step={0.5} suffix="s" onChange={v=>setRecDur(v)}/>
             <div style={{display:"flex",gap:4,alignItems:"center",marginBottom:2}}>
               <input ref={audioFileRef} type="file" accept="audio/*" onChange={loadAudio} style={{display:"none"}}/>
               <span style={{fontSize:9,opacity:0.4,letterSpacing:"0.05em"}}>{"\u266B"}</span>
