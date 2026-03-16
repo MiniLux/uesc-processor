@@ -46,7 +46,7 @@ const MARATHON_PRESETS = {
   "Leela Neon":{palette:"Leela Pink",dither:"Halftone",dp:{...DP0,gamma:1.1,htAngle:45,dotGain:10,dotSize:1.2,brightness:5,contrast:5},gfx:{scanlines:{on:true,gap:2,opacity:0.3,speed:0.1},glitch:{on:true,intensity:0.2,blockSize:8,speed:0.6},rgbShift:{on:true,amount:4,angle:60},noise:{on:true,amount:0.08,speed:0.4},pixelate:{on:false,size:1},vignette:{on:true,strength:0.5},crt:{on:false,curvature:0.15},blockGlitch:{on:false,count:8,maxSize:40},chromatic:{on:true,amount:4},jitter:{on:false,amount:2},colorCycle:{on:false,speed:1},solarize:{on:false,threshold:128,speed:0.5}}},
 };
 
-const GFX0 = {scanlines:{on:false,gap:2,opacity:0.3,speed:0},glitch:{on:false,intensity:0.15,blockSize:8,speed:0.5},rgbShift:{on:false,amount:3,angle:0},noise:{on:false,amount:0.06,speed:0.3},pixelate:{on:false,size:2},vignette:{on:false,strength:0.4},crt:{on:false,curvature:0.2},blockGlitch:{on:false,count:10,maxSize:50},chromatic:{on:false,amount:3},jitter:{on:false,amount:3},colorCycle:{on:false,speed:1},solarize:{on:false,threshold:128,speed:0.5}};
+const GFX0 = {scanlines:{on:false,gap:2,opacity:0.3,speed:0},glitch:{on:false,intensity:0.15,blockSize:8,speed:0.5},rgbShift:{on:false,amount:3,angle:0,speed:0.5},noise:{on:false,amount:0.06,speed:0.3},pixelate:{on:false,size:2},vignette:{on:false,strength:0.4},crt:{on:false,curvature:0.2},blockGlitch:{on:false,count:10,maxSize:50,speed:0.5},chromatic:{on:false,amount:3,speed:0.5},jitter:{on:false,amount:3,speed:1},colorCycle:{on:false,speed:1},solarize:{on:false,threshold:128,speed:0.5},offset:{on:false,speedX:0.5,speedY:0,amount:50,direction:0}};
 const GLITCH_PRESETS = {
   off:{name:"OFF",...GFX0},
   marathon:{name:"MARATHON",...GFX0,scanlines:{on:true,gap:2,opacity:0.35,speed:0},glitch:{on:true,intensity:0.12,blockSize:8,speed:0.4},rgbShift:{on:true,amount:3,angle:0},noise:{on:true,amount:0.06,speed:0.3},vignette:{on:true,strength:0.45}},
@@ -85,15 +85,16 @@ function preProcess(data,w,h,blur,sharpen){
   return out;
 }
 
-function ditherImage(srcData,w,h,algo,palette,p){
+function ditherImage(srcData,w,h,algo,palette,p,offsetX,offsetY){
   const raw=preProcess(srcData,w,h,p.blur||0,p.sharpen||0);
   const data=new Uint8ClampedArray(raw);if(algo==="None")return data;
   const pal=palette||[[0,0,0],[255,255,255]];
   const{gamma=1,bias=0,invert=false,errStr=1,serpentine=false,spread=1,htAngle=0,dotGain=0,dotSize=1,lineWeight=1,frequency=1,depth=1,direction=0,rotation=0,cellSize=8,arms=5,edgeSpread=1,brightness=0,contrast=0,colorMode="rgb",posterize=6,solarizeT=128,duoH="#000000",duoL="#00ff41",dpi=1}=p;
   const errs=new Float32Array(w*h*3);
-  const dpiS=Math.max(0.25,dpi); // DPI scale factor for pattern sizes
+  const dpiS=Math.max(0.25,dpi);
   const rotRad=rotation*Math.PI/180,cosR=Math.cos(rotRad),sinR=Math.sin(rotRad);
   const contF=((contrast+100)/100)**2;
+  const ox=offsetX||0, oy=offsetY||0;
   const duoHR=parseInt((duoH||"#000000").slice(1,3),16),duoHG=parseInt((duoH||"#000000").slice(3,5),16),duoHB=parseInt((duoH||"#000000").slice(5,7),16);
   const duoLR=parseInt((duoL||"#00ff41").slice(1,3),16),duoLG=parseInt((duoL||"#00ff41").slice(3,5),16),duoLB=parseInt((duoL||"#00ff41").slice(5,7),16);
   let vCells=null;if(algo==="Voronoi")vCells=voronoiCells(w,h,cellSize*dpiS);
@@ -102,6 +103,7 @@ function ditherImage(srcData,w,h,algo,palette,p){
     const rev=serpentine&&y%2===1;const x0=rev?w-1:0,x1=rev?-1:w,dx=rev?-1:1;
     for(let x=x0;x!==x1;x+=dx){
       const i=(y*w+x)*4,ei=(y*w+x)*3;
+      const px=x+ox, py=y+oy; // pattern-shifted coords
       let r=255*Math.pow(data[i]/255,1/gamma)+errs[ei]+bias;
       let g=255*Math.pow(data[i+1]/255,1/gamma)+errs[ei+1]+bias;
       let b=255*Math.pow(data[i+2]/255,1/gamma)+errs[ei+2]+bias;
@@ -116,24 +118,24 @@ function ditherImage(srcData,w,h,algo,palette,p){
       r=Math.max(0,Math.min(255,r));g=Math.max(0,Math.min(255,g));b=Math.max(0,Math.min(255,b));
       const br=(r*0.299+g*0.587+b*0.114)/255;
 
-      if(algo.startsWith("Bayer")){const sz=algo==="Bayer 2x2"?2:algo==="Bayer 4x4"?4:8;const mt=sz===2?B2:sz===4?B4:B8;const th=((mt[y%sz][x%sz]+0.5)/(sz*sz)-0.5)*255*spread;const c=closestColor(r+th,g+th,b+th,pal);data[i]=c[0];data[i+1]=c[1];data[i+2]=c[2];continue;}
-      if(algo==="Halftone"){const a=htAngle*Math.PI/180,cs=Math.max(2,Math.round(4*dotSize*dpiS));const rx2=x*Math.cos(a)-y*Math.sin(a),ry2=x*Math.sin(a)+y*Math.cos(a);const cx=(rx2%cs+cs)%cs-cs/2,cy=(ry2%cs+cs)%cs-cs/2;const d=Math.sqrt(cx*cx+cy*cy)/(cs*0.7);const c=(br+dotGain/100)>d?pal[pal.length-1]:pal[0];data[i]=c[0];data[i+1]=c[1];data[i+2]=c[2];continue;}
-      if(algo==="Cross-Hatch"){const sz=Math.max(2,Math.round(6*lineWeight*dpiS));const xr=x*cosR-y*sinR,yr=x*sinR+y*cosR;const h1=((Math.round(xr)+Math.round(yr))%sz+sz)%sz<1,h2=((Math.round(xr)-Math.round(yr))%sz+sz)%sz<1,h3=(Math.round(xr)%sz+sz)%sz<1,h4=(Math.round(yr)%sz+sz)%sz<1;const on=br<0.2?h1||h2||h3||h4:br<0.4?h1||h2||h3:br<0.6?h1||h2:br<0.8?h1:false;const c=on?pal[0]:pal[pal.length-1];data[i]=c[0];data[i+1]=c[1];data[i+2]=c[2];continue;}
-      if(algo==="Diagonal"){const sz=Math.max(2,Math.round(5*lineWeight*dpiS));const xr=x*cosR-y*sinR;const on=((Math.round(xr+y)%sz)+sz)%sz<Math.round(sz*(1-br));const c=on?pal[0]:pal[pal.length-1];data[i]=c[0];data[i+1]=c[1];data[i+2]=c[2];continue;}
-      if(algo==="H-Lines"||algo==="V-Lines"){const sz=Math.max(2,Math.round(4*lineWeight*dpiS));const coord=algo==="H-Lines"?y:x;const on=(coord%sz)<Math.round(sz*(1-br));const c=on?pal[0]:pal[pal.length-1];data[i]=c[0];data[i+1]=c[1];data[i+2]=c[2];continue;}
-      if(algo==="Bi-Thread"){const sz=Math.max(3,Math.round(6*lineWeight*dpiS));const xr=x*cosR-y*sinR,yr=x*sinR+y*cosR;const t1=((Math.round(xr)%sz)+sz)%sz,t2=((Math.round(yr)%sz)+sz)%sz;const on=br<0.5?(t1<Math.round(sz*(1-br)*0.6)||t2<Math.round(sz*(1-br)*0.6)):(t1<1&&br<0.8);const c=on?pal[0]:pal[pal.length-1];data[i]=c[0];data[i+1]=c[1];data[i+2]=c[2];continue;}
-      if(algo==="Herringbone"){const sz=Math.max(3,Math.round(8*lineWeight*dpiS));const xr=x*cosR-y*sinR,yr=x*sinR+y*cosR;const block=Math.floor(yr/sz)%2===0;const coord=block?(Math.round(xr+yr)%sz+sz)%sz:(Math.round(xr-yr)%sz+sz)%sz;const on=coord<Math.round(sz*(1-br));const c=on?pal[0]:pal[pal.length-1];data[i]=c[0];data[i+1]=c[1];data[i+2]=c[2];continue;}
-      if(algo==="FM"){const dir=direction===0?y:direction===1?x:(x+y)*0.707;const freq=frequency*(1+(1-br)*3)/dpiS;const wave=Math.sin(dir*freq*0.3)*0.5+0.5;const on=wave<(1-br)*depth;const c=on?pal[0]:pal[pal.length-1];data[i]=c[0];data[i+1]=c[1];data[i+2]=c[2];continue;}
-      if(algo==="AM"){const dir=direction===0?y:direction===1?x:(x+y)*0.707;const wave=Math.sin(dir*frequency*0.5/dpiS);const on=Math.abs(wave)<(1-br)*depth;const c=on?pal[0]:pal[pal.length-1];data[i]=c[0];data[i+1]=c[1];data[i+2]=c[2];continue;}
-      if(algo==="Wave"){const dir=direction===0?y:direction===1?x:(x+y)*0.707;const perp=direction===0?x:direction===1?y:(x-y)*0.707;const wave=Math.sin(dir*frequency*0.4/dpiS+perp*0.01);const on=Math.abs(wave)*lineWeight*4<(1-br)*lineWeight*3*depth;const c=on?pal[0]:pal[pal.length-1];data[i]=c[0];data[i+1]=c[1];data[i+2]=c[2];continue;}
+      if(algo.startsWith("Bayer")){const sz=algo==="Bayer 2x2"?2:algo==="Bayer 4x4"?4:8;const mt=sz===2?B2:sz===4?B4:B8;const th=((mt[((py%sz)+sz)%sz][((px%sz)+sz)%sz]+0.5)/(sz*sz)-0.5)*255*spread;const c=closestColor(r+th,g+th,b+th,pal);data[i]=c[0];data[i+1]=c[1];data[i+2]=c[2];continue;}
+      if(algo==="Halftone"){const a=htAngle*Math.PI/180,cs=Math.max(2,Math.round(4*dotSize*dpiS));const rx2=px*Math.cos(a)-py*Math.sin(a),ry2=px*Math.sin(a)+py*Math.cos(a);const cx=(rx2%cs+cs)%cs-cs/2,cy=(ry2%cs+cs)%cs-cs/2;const d=Math.sqrt(cx*cx+cy*cy)/(cs*0.7);const c=(br+dotGain/100)>d?pal[pal.length-1]:pal[0];data[i]=c[0];data[i+1]=c[1];data[i+2]=c[2];continue;}
+      if(algo==="Cross-Hatch"){const sz=Math.max(2,Math.round(6*lineWeight*dpiS));const xr=px*cosR-py*sinR,yr=px*sinR+py*cosR;const h1=((Math.round(xr)+Math.round(yr))%sz+sz)%sz<1,h2=((Math.round(xr)-Math.round(yr))%sz+sz)%sz<1,h3=(Math.round(xr)%sz+sz)%sz<1,h4=(Math.round(yr)%sz+sz)%sz<1;const on=br<0.2?h1||h2||h3||h4:br<0.4?h1||h2||h3:br<0.6?h1||h2:br<0.8?h1:false;const c=on?pal[0]:pal[pal.length-1];data[i]=c[0];data[i+1]=c[1];data[i+2]=c[2];continue;}
+      if(algo==="Diagonal"){const sz=Math.max(2,Math.round(5*lineWeight*dpiS));const xr=px*cosR-py*sinR;const on=((Math.round(xr+py)%sz)+sz)%sz<Math.round(sz*(1-br));const c=on?pal[0]:pal[pal.length-1];data[i]=c[0];data[i+1]=c[1];data[i+2]=c[2];continue;}
+      if(algo==="H-Lines"||algo==="V-Lines"){const sz=Math.max(2,Math.round(4*lineWeight*dpiS));const coord=algo==="H-Lines"?py:px;const on=(coord%sz)<Math.round(sz*(1-br));const c=on?pal[0]:pal[pal.length-1];data[i]=c[0];data[i+1]=c[1];data[i+2]=c[2];continue;}
+      if(algo==="Bi-Thread"){const sz=Math.max(3,Math.round(6*lineWeight*dpiS));const xr=px*cosR-py*sinR,yr=px*sinR+py*cosR;const t1=((Math.round(xr)%sz)+sz)%sz,t2=((Math.round(yr)%sz)+sz)%sz;const on=br<0.5?(t1<Math.round(sz*(1-br)*0.6)||t2<Math.round(sz*(1-br)*0.6)):(t1<1&&br<0.8);const c=on?pal[0]:pal[pal.length-1];data[i]=c[0];data[i+1]=c[1];data[i+2]=c[2];continue;}
+      if(algo==="Herringbone"){const sz=Math.max(3,Math.round(8*lineWeight*dpiS));const xr=px*cosR-py*sinR,yr=px*sinR+py*cosR;const block=Math.floor(yr/sz)%2===0;const coord=block?(Math.round(xr+yr)%sz+sz)%sz:(Math.round(xr-yr)%sz+sz)%sz;const on=coord<Math.round(sz*(1-br));const c=on?pal[0]:pal[pal.length-1];data[i]=c[0];data[i+1]=c[1];data[i+2]=c[2];continue;}
+      if(algo==="FM"){const dir=direction===0?py:direction===1?px:(px+py)*0.707;const freq=frequency*(1+(1-br)*3)/dpiS;const wave=Math.sin(dir*freq*0.3)*0.5+0.5;const on=wave<(1-br)*depth;const c=on?pal[0]:pal[pal.length-1];data[i]=c[0];data[i+1]=c[1];data[i+2]=c[2];continue;}
+      if(algo==="AM"){const dir=direction===0?py:direction===1?px:(px+py)*0.707;const wave=Math.sin(dir*frequency*0.5/dpiS);const on=Math.abs(wave)<(1-br)*depth;const c=on?pal[0]:pal[pal.length-1];data[i]=c[0];data[i+1]=c[1];data[i+2]=c[2];continue;}
+      if(algo==="Wave"){const dir=direction===0?py:direction===1?px:(px+py)*0.707;const perp=direction===0?px:direction===1?py:(px-py)*0.707;const wave=Math.sin(dir*frequency*0.4/dpiS+perp*0.01);const on=Math.abs(wave)*lineWeight*4<(1-br)*lineWeight*3*depth;const c=on?pal[0]:pal[pal.length-1];data[i]=c[0];data[i+1]=c[1];data[i+2]=c[2];continue;}
       if(algo==="Contour"){const levels=Math.max(2,Math.round(frequency*8));const q=Math.floor(br*levels)/levels;const on=Math.abs(br-q-0.5/levels)<(0.02*depth*lineWeight);const c=on?pal[0]:pal[pal.length-1];data[i]=c[0];data[i+1]=c[1];data[i+2]=c[2];continue;}
       if(algo==="Random"){const c=closestColor(r+(Math.random()-0.5)*255*spread,g+(Math.random()-0.5)*255*spread,b+(Math.random()-0.5)*255*spread,pal);data[i]=c[0];data[i+1]=c[1];data[i+2]=c[2];continue;}
-      if(algo==="Blue Noise"){const n=(Math.sin(x*12.9898+y*78.233)*43758.5453%1+Math.cos(x*4.898+y*7.23)*23421.631%1)/2;const th=(n-0.5)*255*spread;const c=closestColor(r+th,g+th,b+th,pal);data[i]=c[0];data[i+1]=c[1];data[i+2]=c[2];continue;}
-      if(algo==="Stipple"){const cs2=cellSize*dpiS;const cx2=Math.floor(x/cs2)*cs2+cs2/2,cy2=Math.floor(y/cs2)*cs2+cs2/2;const d=Math.sqrt((x-cx2)**2+(y-cy2)**2)/(cs2*0.7);const on=d<(1-br)*spread;const c=on?pal[0]:pal[pal.length-1];data[i]=c[0];data[i+1]=c[1];data[i+2]=c[2];continue;}
-      if(algo==="Grain"){const n1=Math.sin(x*127.1+y*311.7)*43758.5453%1;const n2=Math.sin(x*269.5+y*183.3)*28001.8384%1;const c=closestColor(r+(n1*0.6+n2*0.4-0.5)*255*spread,g+(n1*0.6+n2*0.4-0.5)*255*spread,b+(n1*0.6+n2*0.4-0.5)*255*spread,pal);data[i]=c[0];data[i+1]=c[1];data[i+2]=c[2];continue;}
-      if(algo==="Spiral"){const ddx=x-w/2,ddy=y-h/2;const c=Math.sin(Math.atan2(ddy,ddx)*arms+Math.sqrt(ddx*ddx+ddy*ddy)*frequency*0.05/dpiS)<(1-br)*2-1?pal[0]:pal[pal.length-1];data[i]=c[0];data[i+1]=c[1];data[i+2]=c[2];continue;}
-      if(algo==="Concentric"){const c=Math.sin(Math.sqrt((x-w/2)**2+(y-h/2)**2)*frequency*0.15/dpiS)<(1-br)*2-1?pal[0]:pal[pal.length-1];data[i]=c[0];data[i+1]=c[1];data[i+2]=c[2];continue;}
-      if(algo==="Voronoi"){let d1=Infinity,d2=Infinity;for(const cell of vCells){const d=Math.sqrt((x-cell.x)**2+(y-cell.y)**2);if(d<d1){d2=d1;d1=d;}else if(d<d2)d2=d;}const c=(d2-d1)<edgeSpread*lineWeight*2*(1.2-br)?pal[0]:pal[pal.length-1];data[i]=c[0];data[i+1]=c[1];data[i+2]=c[2];continue;}
+      if(algo==="Blue Noise"){const n=(Math.sin(px*12.9898+py*78.233)*43758.5453%1+Math.cos(px*4.898+py*7.23)*23421.631%1)/2;const th=(n-0.5)*255*spread;const c=closestColor(r+th,g+th,b+th,pal);data[i]=c[0];data[i+1]=c[1];data[i+2]=c[2];continue;}
+      if(algo==="Stipple"){const cs2=cellSize*dpiS;const cx2=Math.floor(px/cs2)*cs2+cs2/2,cy2=Math.floor(py/cs2)*cs2+cs2/2;const d=Math.sqrt((px-cx2)**2+(py-cy2)**2)/(cs2*0.7);const on=d<(1-br)*spread;const c=on?pal[0]:pal[pal.length-1];data[i]=c[0];data[i+1]=c[1];data[i+2]=c[2];continue;}
+      if(algo==="Grain"){const n1=Math.sin(px*127.1+py*311.7)*43758.5453%1;const n2=Math.sin(px*269.5+py*183.3)*28001.8384%1;const c=closestColor(r+(n1*0.6+n2*0.4-0.5)*255*spread,g+(n1*0.6+n2*0.4-0.5)*255*spread,b+(n1*0.6+n2*0.4-0.5)*255*spread,pal);data[i]=c[0];data[i+1]=c[1];data[i+2]=c[2];continue;}
+      if(algo==="Spiral"){const ddx=px-w/2,ddy=py-h/2;const c=Math.sin(Math.atan2(ddy,ddx)*arms+Math.sqrt(ddx*ddx+ddy*ddy)*frequency*0.05/dpiS)<(1-br)*2-1?pal[0]:pal[pal.length-1];data[i]=c[0];data[i+1]=c[1];data[i+2]=c[2];continue;}
+      if(algo==="Concentric"){const c=Math.sin(Math.sqrt((px-w/2)**2+(py-h/2)**2)*frequency*0.15/dpiS)<(1-br)*2-1?pal[0]:pal[pal.length-1];data[i]=c[0];data[i+1]=c[1];data[i+2]=c[2];continue;}
+      if(algo==="Voronoi"){let d1=Infinity,d2=Infinity;for(const cell of vCells){const d=Math.sqrt((px-cell.x)**2+(py-cell.y)**2);if(d<d1){d2=d1;d1=d;}else if(d<d2)d2=d;}const c=(d2-d1)<edgeSpread*lineWeight*2*(1.2-br)?pal[0]:pal[pal.length-1];data[i]=c[0];data[i+1]=c[1];data[i+2]=c[2];continue;}
 
       // --- Plus pattern ---
       if(algo==="Plus"){
@@ -141,8 +143,8 @@ function ditherImage(srcData,w,h,algo,palette,p){
         const gap=Math.max(sz+1,Math.round((p.plusGap||16)*dpiS));
         const thk=Math.max(1,Math.round((p.plusThickness||2)*dpiS));
         const halfT=Math.floor(thk/2);
-        const cx2=((x%gap)+gap)%gap-Math.floor(gap/2);
-        const cy2=((y%gap)+gap)%gap-Math.floor(gap/2);
+        const cx2=((px%gap)+gap)%gap-Math.floor(gap/2);
+        const cy2=((py%gap)+gap)%gap-Math.floor(gap/2);
         const inH=Math.abs(cy2)<=halfT&&Math.abs(cx2)<=sz;
         const inV=Math.abs(cx2)<=halfT&&Math.abs(cy2)<=sz;
         const inPlus=inH||inV;
@@ -165,8 +167,8 @@ function ditherImage(srcData,w,h,algo,palette,p){
         const blockPxW=bw*charW+blockGap;
         const blockPxH=bh*charH+blockGap;
         // Which block are we in?
-        const bx2=((x%blockPxW)+blockPxW)%blockPxW;
-        const by2=((y%blockPxH)+blockPxH)%blockPxH;
+        const bx2=((px%blockPxW)+blockPxW)%blockPxW;
+        const by2=((py%blockPxH)+blockPxH)%blockPxH;
         // Are we in the text area (not gap)?
         const inTextX=bx2<bw*charW;
         const inTextY=by2<bh*charH;
@@ -180,8 +182,8 @@ function ditherImage(srcData,w,h,algo,palette,p){
         const lx=bx2-cx3*charW;
         const ly=by2-cy3*charH;
         // Block index for seeded random
-        const blkIdxX=Math.floor(x/blockPxW);
-        const blkIdxY=Math.floor(y/blockPxH);
+        const blkIdxX=Math.floor(px/blockPxW);
+        const blkIdxY=Math.floor(py/blockPxH);
         // Seeded random digit
         const seed=Math.abs(Math.sin(blkIdxX*127.1+blkIdxY*311.7+cx3*73.7+cy3*37.9)*43758.5453);
         const digit=Math.floor((seed%1)*10);
@@ -227,11 +229,11 @@ function applyGlitch(ctx,canvas,src,fx,t){
   const w=canvas.width,h=canvas.height;ctx.drawImage(src,0,0,w,h);
   if(fx.crt?.on&&fx.crt.curvature>0){const k=fx.crt.curvature*0.5,id=ctx.getImageData(0,0,w,h),od=ctx.createImageData(w,h),cx=w/2,cy=h/2;for(let y=0;y<h;y++)for(let x=0;x<w;x++){const nx2=(x-cx)/cx,ny2=(y-cy)/cy,r2=nx2*nx2+ny2*ny2,d2=1+r2*k,sx=Math.round(nx2*d2*cx+cx),sy=Math.round(ny2*d2*cy+cy),di=(y*w+x)*4;if(sx>=0&&sx<w&&sy>=0&&sy<h){const si=(sy*w+sx)*4;od.data[di]=id.data[si];od.data[di+1]=id.data[si+1];od.data[di+2]=id.data[si+2];od.data[di+3]=id.data[si+3];}else od.data[di+3]=255;}ctx.putImageData(od,0,0);}
   if(fx.pixelate?.on&&(fx.pixelate.size||1)>1){const s=fx.pixelate.size,tc=document.createElement("canvas");tc.width=Math.ceil(w/s);tc.height=Math.ceil(h/s);const tx=tc.getContext("2d");tx.imageSmoothingEnabled=false;tx.drawImage(canvas,0,0,tc.width,tc.height);ctx.imageSmoothingEnabled=false;ctx.clearRect(0,0,w,h);ctx.drawImage(tc,0,0,w,h);ctx.imageSmoothingEnabled=true;}
-  if(fx.rgbShift?.on&&(fx.rgbShift.amount||0)>0){const a=fx.rgbShift.amount,ang=(fx.rgbShift.angle||0)*Math.PI/180,ddx=Math.cos(ang)*a,ddy=Math.sin(ang)*a,id=ctx.getImageData(0,0,w,h),od=new ImageData(w,h);for(let y=0;y<h;y++)for(let x=0;x<w;x++){const i=(y*w+x)*4,rx=Math.round(x-ddx),ry=Math.round(y-ddy),bx=Math.round(x+ddx),by=Math.round(y+ddy);od.data[i]=(rx>=0&&rx<w&&ry>=0&&ry<h)?id.data[(ry*w+rx)*4]:id.data[i];od.data[i+1]=id.data[i+1];od.data[i+2]=(bx>=0&&bx<w&&by>=0&&by<h)?id.data[(by*w+bx)*4+2]:id.data[i+2];od.data[i+3]=255;}ctx.putImageData(od,0,0);}
-  if(fx.chromatic?.on&&(fx.chromatic.amount||0)>0){const amt=fx.chromatic.amount,id=ctx.getImageData(0,0,w,h),od=new ImageData(w,h),cx2=w/2,cy2=h/2;for(let y=0;y<h;y++)for(let x=0;x<w;x++){const i=(y*w+x)*4,ddx=(x-cx2)/cx2,ddy=(y-cy2)/cy2,dist=Math.sqrt(ddx*ddx+ddy*ddy),sh=Math.round(dist*amt),rx=Math.min(w-1,Math.max(0,x-sh)),bx=Math.min(w-1,Math.max(0,x+sh));od.data[i]=id.data[(y*w+rx)*4];od.data[i+1]=id.data[i+1];od.data[i+2]=id.data[(y*w+bx)*4+2];od.data[i+3]=255;}ctx.putImageData(od,0,0);}
+  if(fx.rgbShift?.on&&(fx.rgbShift.amount||0)>0){const a=fx.rgbShift.amount,spd=fx.rgbShift.speed||0,angBase=(fx.rgbShift.angle||0),ang=(angBase+t*spd*120)*Math.PI/180,ddx=Math.cos(ang)*a,ddy=Math.sin(ang)*a,id=ctx.getImageData(0,0,w,h),od=new ImageData(w,h);for(let y=0;y<h;y++)for(let x=0;x<w;x++){const i=(y*w+x)*4,rx=Math.round(x-ddx),ry=Math.round(y-ddy),bx=Math.round(x+ddx),by=Math.round(y+ddy);od.data[i]=(rx>=0&&rx<w&&ry>=0&&ry<h)?id.data[(ry*w+rx)*4]:id.data[i];od.data[i+1]=id.data[i+1];od.data[i+2]=(bx>=0&&bx<w&&by>=0&&by<h)?id.data[(by*w+bx)*4+2]:id.data[i+2];od.data[i+3]=255;}ctx.putImageData(od,0,0);}
+  if(fx.chromatic?.on&&(fx.chromatic.amount||0)>0){const baseAmt=fx.chromatic.amount,spd=fx.chromatic.speed||0,amt=baseAmt*(1+Math.sin(t*spd*4)*0.5*Math.min(spd,1)),id=ctx.getImageData(0,0,w,h),od=new ImageData(w,h),cx2=w/2,cy2=h/2;for(let y=0;y<h;y++)for(let x=0;x<w;x++){const i=(y*w+x)*4,ddx=(x-cx2)/cx2,ddy=(y-cy2)/cy2,dist=Math.sqrt(ddx*ddx+ddy*ddy),sh=Math.round(dist*amt),rx=Math.min(w-1,Math.max(0,x-sh)),bx=Math.min(w-1,Math.max(0,x+sh));od.data[i]=id.data[(y*w+rx)*4];od.data[i+1]=id.data[i+1];od.data[i+2]=id.data[(y*w+bx)*4+2];od.data[i+3]=255;}ctx.putImageData(od,0,0);}
   if(fx.glitch?.on&&(fx.glitch.intensity||0)>0){const int=fx.glitch.intensity,bh=fx.glitch.blockSize||8,spd=fx.glitch.speed||0.5,seed=Math.sin(t*spd*10)*10000;for(let y=0;y<h;y+=bh){const rnd=Math.abs(Math.sin(seed+y*0.37)*Math.cos(seed*0.7+y*0.13));if(rnd>1-int){const shift=Math.round((Math.sin(seed+y*0.73)-0.5)*int*w*0.3),bht=Math.min(bh,h-y);if(bht>0)try{const bd=ctx.getImageData(0,y,w,bht);ctx.clearRect(0,y,w,bht);ctx.putImageData(bd,shift,y);}catch(e){}}}}
-  if(fx.blockGlitch?.on&&(fx.blockGlitch.count||0)>0){const count=fx.blockGlitch.count,maxSz=fx.blockGlitch.maxSize||50;for(let i=0;i<count;i++){const s1=Math.abs(Math.sin(t*2.7+i*73.1+0.5)*43758.5453)%1,s2=Math.abs(Math.cos(t*3.1+i*91.7+0.3)*28001.8384)%1,s3=Math.abs(Math.sin(t*1.3+i*47.3+0.7)*17943.2846)%1,s4=Math.abs(Math.cos(t*4.1+i*31.9+0.1)*36712.9182)%1;const bx=Math.floor(s1*w*0.8),by=Math.floor(s2*h*0.8),bw=Math.max(8,Math.floor(s3*maxSz)),bh2=Math.max(4,Math.floor(s4*maxSz*0.4)),sw2=Math.min(bw,w-bx-1),sh2=Math.min(bh2,h-by-1);if(sw2>1&&sh2>1)try{const bl=ctx.getImageData(bx,by,sw2,sh2);ctx.putImageData(bl,bx+Math.round((Math.sin(t*5+i*13)*0.5+0.5)*60-30),by+Math.round((Math.cos(t*3+i*17)*0.5+0.5)*20-10));}catch(e){}}}
-  if(fx.jitter?.on&&(fx.jitter.amount||0)>0){const amt=fx.jitter.amount,id=ctx.getImageData(0,0,w,h),od=ctx.createImageData(w,h);for(let y=0;y<h;y++){const n=Math.sin(y*0.7+t*15)*Math.cos(y*0.3+t*8),j=Math.round(n*amt*(0.4+0.6*Math.abs(Math.sin(y*0.05+t*3))));for(let x=0;x<w;x++){const sx=Math.max(0,Math.min(w-1,x+j)),si=(y*w+sx)*4,di=(y*w+x)*4;od.data[di]=id.data[si];od.data[di+1]=id.data[si+1];od.data[di+2]=id.data[si+2];od.data[di+3]=id.data[si+3];}}ctx.putImageData(od,0,0);}
+  if(fx.blockGlitch?.on&&(fx.blockGlitch.count||0)>0){const count=fx.blockGlitch.count,maxSz=fx.blockGlitch.maxSize||50,spd=fx.blockGlitch.speed||0.5,bt=t*spd;for(let i=0;i<count;i++){const s1=Math.abs(Math.sin(bt*2.7+i*73.1+0.5)*43758.5453)%1,s2=Math.abs(Math.cos(bt*3.1+i*91.7+0.3)*28001.8384)%1,s3=Math.abs(Math.sin(bt*1.3+i*47.3+0.7)*17943.2846)%1,s4=Math.abs(Math.cos(bt*4.1+i*31.9+0.1)*36712.9182)%1;const bx=Math.floor(s1*w*0.8),by=Math.floor(s2*h*0.8),bw=Math.max(8,Math.floor(s3*maxSz)),bh2=Math.max(4,Math.floor(s4*maxSz*0.4)),sw2=Math.min(bw,w-bx-1),sh2=Math.min(bh2,h-by-1);if(sw2>1&&sh2>1)try{const bl=ctx.getImageData(bx,by,sw2,sh2);ctx.putImageData(bl,bx+Math.round((Math.sin(bt*5+i*13)*0.5+0.5)*60-30),by+Math.round((Math.cos(bt*3+i*17)*0.5+0.5)*20-10));}catch(e){}}}
+  if(fx.jitter?.on&&(fx.jitter.amount||0)>0){const amt=fx.jitter.amount,spd=fx.jitter.speed||1,jt=t*spd,id=ctx.getImageData(0,0,w,h),od=ctx.createImageData(w,h);for(let y=0;y<h;y++){const n=Math.sin(y*0.7+jt*15)*Math.cos(y*0.3+jt*8),j=Math.round(n*amt*(0.4+0.6*Math.abs(Math.sin(y*0.05+jt*3))));for(let x=0;x<w;x++){const sx=Math.max(0,Math.min(w-1,x+j)),si=(y*w+sx)*4,di=(y*w+x)*4;od.data[di]=id.data[si];od.data[di+1]=id.data[si+1];od.data[di+2]=id.data[si+2];od.data[di+3]=id.data[si+3];}}ctx.putImageData(od,0,0);}
   // Color Cycle — palette rotation applied in pipeline, not here
   // Solarize — animated threshold sweep applied in pipeline, not here
   if(fx.scanlines?.on){const gap=fx.scanlines.gap||2,op=fx.scanlines.opacity||0.3,off=Math.floor(t*(fx.scanlines.speed||0)*50)%(gap+1);ctx.fillStyle=`rgba(0,0,0,${op})`;for(let y=off;y<h;y+=gap+1)ctx.fillRect(0,y,w,1);}
@@ -497,7 +499,19 @@ export default function UESCProcessor(){
     const w=Math.max(1,Math.round(ew*Math.min(sc,scale))),h=Math.max(1,Math.round(eh*Math.min(sc,scale)));
     src.width=w;src.height=h;src.getContext("2d").drawImage(actualSource,0,0,w,h);
     const pal=getPal(P.palette,P.customColors);
-    if(P.ditherAlgo!=="None"&&pal){const id=src.getContext("2d").getImageData(0,0,w,h);const dd=ditherImage(id.data,w,h,P.ditherAlgo,pal,P.dp);dith.width=w;dith.height=h;dith.getContext("2d").putImageData(new ImageData(new Uint8ClampedArray(dd),w,h),0,0);}
+    // Compute dither offset animation
+    const oFx=P.gfx.offset;
+    let ditherOX=0, ditherOY=0;
+    if(oFx?.on){
+      const amt=oFx.amount||50;
+      const dir=oFx.direction||0; // 0=H, 1=V, 2=diag, 3=radial
+      const sx=oFx.speedX||0.5, sy=oFx.speedY||0;
+      if(dir===0){ditherOX=time*sx*amt;ditherOY=time*sy*amt;}
+      else if(dir===1){ditherOX=time*sy*amt;ditherOY=time*sx*amt;}
+      else if(dir===2){ditherOX=time*sx*amt;ditherOY=time*sx*amt;}
+      else{ditherOX=Math.sin(time*sx)*amt;ditherOY=Math.cos(time*sx)*amt;}
+    }
+    if(P.ditherAlgo!=="None"&&pal){const id=src.getContext("2d").getImageData(0,0,w,h);const dd=ditherImage(id.data,w,h,P.ditherAlgo,pal,P.dp,ditherOX,ditherOY);dith.width=w;dith.height=h;dith.getContext("2d").putImageData(new ImageData(new Uint8ClampedArray(dd),w,h),0,0);}
     else if(pal){const id=src.getContext("2d").getImageData(0,0,w,h);const pp=preProcess(id.data,w,h,P.dp.blur||0,P.dp.sharpen||0);for(let i=0;i<pp.length;i+=4){const c=closestColor(pp[i],pp[i+1],pp[i+2],pal);pp[i]=c[0];pp[i+1]=c[1];pp[i+2]=c[2];}dith.width=w;dith.height=h;dith.getContext("2d").putImageData(new ImageData(new Uint8ClampedArray(pp),w,h),0,0);}
     else{dith.width=w;dith.height=h;dith.getContext("2d").drawImage(src,0,0);}
 
@@ -655,16 +669,22 @@ export default function UESCProcessor(){
             <div style={{display:"flex",flexWrap:"wrap",gap:3,marginBottom:8}}>{Object.entries(GLITCH_PRESETS).map(([k,v])=>(<button key={k} onClick={()=>loadGlitchPreset(k)} style={{padding:"2px 7px",fontSize:8,fontFamily:"inherit",background:glitchPreset===k?"#ccc":"transparent",color:glitchPreset===k?"#0a0a0a":"#888",border:`1px solid ${glitchPreset===k?"#ccc":"#333"}`,borderRadius:2,cursor:"pointer",letterSpacing:1}}>{v.name}</button>))}</div>
             <Tog label="Scanlines" value={gfx.scanlines?.on} onChange={v=>setFx("scanlines","on",v)}/>{gfx.scanlines?.on&&<><Rng label="Gap" value={gfx.scanlines.gap||2} min={1} max={8} onChange={v=>setFx("scanlines","gap",v)}/><Rng label="Opacity" value={gfx.scanlines.opacity||0.3} min={0} max={1} step={0.05} onChange={v=>setFx("scanlines","opacity",v)}/><Rng label="Speed" value={gfx.scanlines.speed||0} min={0} max={2} step={0.1} onChange={v=>setFx("scanlines","speed",v)}/></>}
             <Tog label="Glitch" value={gfx.glitch?.on} onChange={v=>setFx("glitch","on",v)}/>{gfx.glitch?.on&&<><Rng label="Intensity" value={gfx.glitch.intensity||0.15} min={0} max={1} step={0.05} onChange={v=>setFx("glitch","intensity",v)}/><Rng label="Block Size" value={gfx.glitch.blockSize||8} min={2} max={40} onChange={v=>setFx("glitch","blockSize",v)}/><Rng label="Speed" value={gfx.glitch.speed||0.5} min={0} max={2} step={0.1} onChange={v=>setFx("glitch","speed",v)}/></>}
-            <Tog label="RGB Shift" value={gfx.rgbShift?.on} onChange={v=>setFx("rgbShift","on",v)}/>{gfx.rgbShift?.on&&<><Rng label="Amount" value={gfx.rgbShift.amount||3} min={0} max={20} onChange={v=>setFx("rgbShift","amount",v)}/><Rng label="Angle" value={gfx.rgbShift.angle||0} min={0} max={360} suffix={"\u00B0"} onChange={v=>setFx("rgbShift","angle",v)}/></>}
-            <Tog label="Chromatic" value={gfx.chromatic?.on} onChange={v=>setFx("chromatic","on",v)}/>{gfx.chromatic?.on&&<Rng label="Amount" value={gfx.chromatic.amount||3} min={0} max={15} onChange={v=>setFx("chromatic","amount",v)}/>}
-            <Tog label="Block Glitch" value={gfx.blockGlitch?.on} onChange={v=>setFx("blockGlitch","on",v)}/>{gfx.blockGlitch?.on&&<><Rng label="Count" value={gfx.blockGlitch.count||10} min={1} max={50} onChange={v=>setFx("blockGlitch","count",v)}/><Rng label="Max Size" value={gfx.blockGlitch.maxSize||50} min={10} max={150} onChange={v=>setFx("blockGlitch","maxSize",v)}/></>}
-            <Tog label="Jitter" value={gfx.jitter?.on} onChange={v=>setFx("jitter","on",v)}/>{gfx.jitter?.on&&<Rng label="Amount" value={gfx.jitter.amount||3} min={1} max={15} onChange={v=>setFx("jitter","amount",v)}/>}
+            <Tog label="RGB Shift" value={gfx.rgbShift?.on} onChange={v=>setFx("rgbShift","on",v)}/>{gfx.rgbShift?.on&&<><Rng label="Amount" value={gfx.rgbShift.amount||3} min={0} max={20} onChange={v=>setFx("rgbShift","amount",v)}/><Rng label="Angle" value={gfx.rgbShift.angle||0} min={0} max={360} suffix={"\u00B0"} onChange={v=>setFx("rgbShift","angle",v)}/><Rng label="Speed" value={gfx.rgbShift.speed||0} min={0} max={3} step={0.1} onChange={v=>setFx("rgbShift","speed",v)}/></>}
+            <Tog label="Chromatic" value={gfx.chromatic?.on} onChange={v=>setFx("chromatic","on",v)}/>{gfx.chromatic?.on&&<><Rng label="Amount" value={gfx.chromatic.amount||3} min={0} max={15} onChange={v=>setFx("chromatic","amount",v)}/><Rng label="Speed" value={gfx.chromatic.speed||0} min={0} max={3} step={0.1} onChange={v=>setFx("chromatic","speed",v)}/></>}
+            <Tog label="Block Glitch" value={gfx.blockGlitch?.on} onChange={v=>setFx("blockGlitch","on",v)}/>{gfx.blockGlitch?.on&&<><Rng label="Count" value={gfx.blockGlitch.count||10} min={1} max={50} onChange={v=>setFx("blockGlitch","count",v)}/><Rng label="Max Size" value={gfx.blockGlitch.maxSize||50} min={10} max={150} onChange={v=>setFx("blockGlitch","maxSize",v)}/><Rng label="Speed" value={gfx.blockGlitch.speed||0.5} min={0.1} max={3} step={0.1} onChange={v=>setFx("blockGlitch","speed",v)}/></>}
+            <Tog label="Jitter" value={gfx.jitter?.on} onChange={v=>setFx("jitter","on",v)}/>{gfx.jitter?.on&&<><Rng label="Amount" value={gfx.jitter.amount||3} min={1} max={15} onChange={v=>setFx("jitter","amount",v)}/><Rng label="Speed" value={gfx.jitter.speed||1} min={0.1} max={5} step={0.1} onChange={v=>setFx("jitter","speed",v)}/></>}
             <Tog label="Color Cycle" value={gfx.colorCycle?.on} onChange={v=>setFx("colorCycle","on",v)}/>{gfx.colorCycle?.on&&<Rng label="Speed" value={gfx.colorCycle.speed||1} min={0.1} max={5} step={0.1} onChange={v=>setFx("colorCycle","speed",v)}/>}
             <Tog label="Solarize" value={gfx.solarize?.on} onChange={v=>setFx("solarize","on",v)}/>{gfx.solarize?.on&&<><Rng label="Threshold" value={gfx.solarize.threshold||128} min={0} max={255} step={1} onChange={v=>setFx("solarize","threshold",v)}/><Rng label="Sweep Speed" value={gfx.solarize.speed||0.5} min={0.1} max={3} step={0.1} onChange={v=>setFx("solarize","speed",v)}/></>}
             <Tog label="Noise" value={gfx.noise?.on} onChange={v=>setFx("noise","on",v)}/>{gfx.noise?.on&&<><Rng label="Amount" value={gfx.noise.amount||0.06} min={0} max={0.5} step={0.01} onChange={v=>setFx("noise","amount",v)}/><Rng label="Speed" value={gfx.noise.speed||0.3} min={0} max={2} step={0.1} onChange={v=>setFx("noise","speed",v)}/></>}
             <Tog label="Pixelate" value={gfx.pixelate?.on} onChange={v=>setFx("pixelate","on",v)}/>{gfx.pixelate?.on&&<Rng label="Size" value={gfx.pixelate.size||2} min={1} max={12} onChange={v=>setFx("pixelate","size",v)}/>}
             <Tog label="Vignette" value={gfx.vignette?.on} onChange={v=>setFx("vignette","on",v)}/>{gfx.vignette?.on&&<Rng label="Strength" value={gfx.vignette.strength||0.4} min={0} max={1} step={0.05} onChange={v=>setFx("vignette","strength",v)}/>}
             <Tog label="CRT Barrel" value={gfx.crt?.on} onChange={v=>setFx("crt","on",v)}/>{gfx.crt?.on&&<Rng label="Curvature" value={gfx.crt.curvature||0.2} min={0.05} max={1} step={0.05} onChange={v=>setFx("crt","curvature",v)}/>}
+            <Tog label="Offset Sweep" value={gfx.offset?.on} onChange={v=>setFx("offset","on",v)}/>{gfx.offset?.on&&<>
+              <Rng label="Amount" value={gfx.offset?.amount||50} min={5} max={200} step={1} onChange={v=>setFx("offset","amount",v)}/>
+              <Rng label="Speed X" value={gfx.offset?.speedX||0.5} min={0} max={5} step={0.1} onChange={v=>setFx("offset","speedX",v)}/>
+              <Rng label="Speed Y" value={gfx.offset?.speedY||0} min={0} max={5} step={0.1} onChange={v=>setFx("offset","speedY",v)}/>
+              <Sel label="Direction" value={String(gfx.offset?.direction||0)} onChange={v=>setFx("offset","direction",+v)} opts={[{v:"0",l:"Horizontal"},{v:"1",l:"Vertical"},{v:"2",l:"Diagonal"},{v:"3",l:"Circular"}]}/>
+            </>}
           </Sec>
 
           <Sec title="Animation" defaultOpen={false}><Tog label={"\u25B6 Animate"} value={animate} onChange={setAnimate}/><div style={{fontSize:8,opacity:0.25,marginTop:2}}>Time-based effects. Canvas always live.</div></Sec>
