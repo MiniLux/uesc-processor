@@ -46,7 +46,7 @@ const MARATHON_PRESETS = {
   "Leela Neon":{palette:"Leela Pink",dither:"Halftone",dp:{...DP0,gamma:1.1,htAngle:45,dotGain:10,dotSize:1.2,brightness:5,contrast:5},gfx:{scanlines:{on:true,gap:2,opacity:0.3,speed:0.1},glitch:{on:true,intensity:0.2,blockSize:8,speed:0.6},rgbShift:{on:true,amount:4,angle:60},noise:{on:true,amount:0.08,speed:0.4},pixelate:{on:false,size:1},vignette:{on:true,strength:0.5},crt:{on:false,curvature:0.15},blockGlitch:{on:false,count:8,maxSize:40},chromatic:{on:true,amount:4},jitter:{on:false,amount:2},colorCycle:{on:false,speed:1},solarize:{on:false,threshold:128,speed:0.5}}},
 };
 
-const GFX0 = {scanlines:{on:false,gap:2,opacity:0.3,speed:0},glitch:{on:false,intensity:0.15,blockSize:8,speed:0.5},rgbShift:{on:false,amount:3,angle:0,speed:0.5},noise:{on:false,amount:0.06,speed:0.3},pixelate:{on:false,size:2},vignette:{on:false,strength:0.4},crt:{on:false,curvature:0.2},blockGlitch:{on:false,count:10,maxSize:50,speed:0.5},chromatic:{on:false,amount:3,speed:0.5},jitter:{on:false,amount:3,speed:1},colorCycle:{on:false,speed:1},solarize:{on:false,threshold:128,speed:0.5},offset:{on:false,speedX:0.5,speedY:0,amount:50,direction:0},multicolor:{on:false,patchSize:20,speed:0.5,shape:0},coords:{on:false,density:50,threshold:40,fontSize:9,speed:0.3,color:"#ffffff",colorMode:0,font:"'Courier New',monospace",bgOn:false,bgColor:"#000000"}};
+const GFX0 = {scanlines:{on:false,gap:2,opacity:0.3,speed:0},glitch:{on:false,intensity:0.15,blockSize:8,speed:0.5},rgbShift:{on:false,amount:3,angle:0,speed:0.5},noise:{on:false,amount:0.06,speed:0.3},pixelate:{on:false,size:2},vignette:{on:false,strength:0.4},crt:{on:false,curvature:0.2},blockGlitch:{on:false,count:10,maxSize:50,speed:0.5},chromatic:{on:false,amount:3,speed:0.5},jitter:{on:false,amount:3,speed:1},colorCycle:{on:false,speed:1},solarize:{on:false,threshold:128,speed:0.5},offset:{on:false,speedX:0.5,speedY:0,amount:50,direction:0},multicolor:{on:false,patchSize:20,speed:0.5,shape:0},coords:{on:false,density:50,threshold:40,fontSize:9,speed:0.3,color:"#ffffff",colorMode:0,font:"'Courier New',monospace",bgOn:false,bgColor:"#000000"},targets:{on:false,density:30,threshold:40,boxSize:20,lineThreshold:120,color:"#cccccc",lineWidth:1}};
 const GLITCH_PRESETS = {
   off:{name:"OFF",...GFX0},
   marathon:{name:"MARATHON",...GFX0,scanlines:{on:true,gap:2,opacity:0.35,speed:0},glitch:{on:true,intensity:0.12,blockSize:8,speed:0.4},rgbShift:{on:true,amount:3,angle:0},noise:{on:true,amount:0.06,speed:0.3},vignette:{on:true,strength:0.45}},
@@ -681,6 +681,78 @@ function applyGlitch(ctx,canvas,src,fx,t,pal,mcSvgMask){
       ctx.fillText(num,pt.x+3,pt.y);
       ctx.fillRect(pt.x-1,pt.y-1,2,2);
     }
+    ctx.restore();
+  }
+
+  // Targets: squares with crosshairs at edge points, connected by lines
+  if(fx.targets?.on){
+    const density=fx.targets.density??30;
+    const thr=fx.targets.threshold??40;
+    const boxSz=fx.targets.boxSize??20;
+    const lineThr=fx.targets.lineThreshold??120;
+    const lw=fx.targets.lineWidth??1;
+    const tColor=fx.targets.color||"#cccccc";
+
+    // Get luminance for Sobel
+    const tid=ctx.getImageData(0,0,w,h);const td=tid.data;
+    const tlum=new Float32Array(w*h);
+    for(let j=0;j<w*h;j++)tlum[j]=td[j*4]*0.299+td[j*4+1]*0.587+td[j*4+2]*0.114;
+
+    // Find edge points on grid
+    const gridStep=Math.max(8,Math.round(200/Math.max(1,density)*10));
+    const tpoints=[];
+    for(let gy=2;gy<h-2;gy+=gridStep){
+      for(let gx=2;gx<w-2;gx+=gridStep){
+        let bestMag=0,bestX=gx,bestY=gy;
+        const scanR=Math.floor(gridStep/2);
+        for(let sy=Math.max(1,gy-scanR);sy<Math.min(h-1,gy+scanR);sy+=2){
+          for(let sx=Math.max(1,gx-scanR);sx<Math.min(w-1,gx+scanR);sx+=2){
+            const idx2=sy*w+sx;
+            const gxS=(-tlum[idx2-w-1]+tlum[idx2-w+1]-2*tlum[idx2-1]+2*tlum[idx2+1]-tlum[idx2+w-1]+tlum[idx2+w+1]);
+            const gyS=(-tlum[idx2-w-1]-2*tlum[idx2-w]-tlum[idx2-w+1]+tlum[idx2+w-1]+2*tlum[idx2+w]+tlum[idx2+w+1]);
+            const mag=Math.sqrt(gxS*gxS+gyS*gyS);
+            if(mag>bestMag){bestMag=mag;bestX=sx;bestY=sy;}
+          }
+        }
+        if(bestMag>thr)tpoints.push({x:bestX,y:bestY,mag:bestMag});
+      }
+    }
+
+    ctx.save();
+    ctx.strokeStyle=tColor;
+    ctx.fillStyle=tColor;
+    ctx.lineWidth=lw;
+
+    // Draw connecting lines between nearby points
+    for(let i=0;i<tpoints.length;i++){
+      for(let j=i+1;j<tpoints.length;j++){
+        const dx=tpoints[i].x-tpoints[j].x,dy=tpoints[i].y-tpoints[j].y;
+        const dist=Math.sqrt(dx*dx+dy*dy);
+        if(dist<lineThr){
+          const alpha=Math.max(0.1,1-dist/lineThr);
+          ctx.globalAlpha=alpha;
+          ctx.beginPath();
+          ctx.moveTo(tpoints[i].x,tpoints[i].y);
+          ctx.lineTo(tpoints[j].x,tpoints[j].y);
+          ctx.stroke();
+        }
+      }
+    }
+
+    // Draw boxes with crosshairs
+    ctx.globalAlpha=1;
+    const half=boxSz/2;
+    const cross=boxSz*0.2;
+    for(const pt of tpoints){
+      // Box
+      ctx.strokeRect(pt.x-half,pt.y-half,boxSz,boxSz);
+      // Crosshair
+      ctx.beginPath();
+      ctx.moveTo(pt.x-cross,pt.y);ctx.lineTo(pt.x+cross,pt.y);
+      ctx.moveTo(pt.x,pt.y-cross);ctx.lineTo(pt.x,pt.y+cross);
+      ctx.stroke();
+    }
+
     ctx.restore();
   }
 
@@ -1415,6 +1487,18 @@ export default function UESCProcessor(){
                 <input type="color" value={gfx.coords?.bgColor||"#000000"} onChange={e=>setFx("coords","bgColor",e.target.value)} style={{width:24,height:16,border:"1px solid #333",borderRadius:2,cursor:"pointer",padding:0,background:"none"}}/>
                 <span style={{fontSize:9,fontFamily:"'Courier New',monospace",color:"#666"}}>{gfx.coords?.bgColor||"#000000"}</span>
               </div>}
+            </>}
+            <Tog label="Targets" value={gfx.targets?.on} onChange={v=>setFx("targets","on",v)}/>{gfx.targets?.on&&<>
+              <Rng label="Density" value={gfx.targets?.density??30} min={5} max={150} step={1} onChange={v=>setFx("targets","density",v)}/>
+              <Rng label="Edge Threshold" value={gfx.targets?.threshold??40} min={5} max={150} step={1} onChange={v=>setFx("targets","threshold",v)}/>
+              <Rng label="Box Size" value={gfx.targets?.boxSize??20} min={5} max={60} step={1} onChange={v=>setFx("targets","boxSize",v)}/>
+              <Rng label="Link Distance" value={gfx.targets?.lineThreshold??120} min={20} max={400} step={5} onChange={v=>setFx("targets","lineThreshold",v)}/>
+              <Rng label="Line Width" value={gfx.targets?.lineWidth??1} min={0.5} max={4} step={0.5} onChange={v=>setFx("targets","lineWidth",v)}/>
+              <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:5}}>
+                <span style={{...LBL}}>Color</span>
+                <input type="color" value={gfx.targets?.color||"#cccccc"} onChange={e=>setFx("targets","color",e.target.value)} style={{width:24,height:16,border:"1px solid #333",borderRadius:2,cursor:"pointer",padding:0,background:"none"}}/>
+                <span style={{fontSize:9,fontFamily:"'Courier New',monospace",color:"#666"}}>{gfx.targets?.color||"#cccccc"}</span>
+              </div>
             </>}
           </Sec>
 
