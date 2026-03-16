@@ -104,14 +104,9 @@ function ditherImage(srcData,w,h,algo,palette,p,offsetX,offsetY){
     for(let x=x0;x!==x1;x+=dx){
       const i=(y*w+x)*4,ei=(y*w+x)*3;
       const px=x+ox, py=y+oy; // pattern-shifted coords
-      // For error diffusion & threshold: offset the SOURCE read position (wrap around)
-      const hasOffset=(ox!==0||oy!==0);
-      const sx=hasOffset?((x+Math.round(ox))%w+w)%w:x;
-      const sy=hasOffset?((y+Math.round(oy))%h+h)%h:y;
-      const si=(sy*w+sx)*4;
-      let r=255*Math.pow(data[hasOffset?si:i]/255,1/gamma)+errs[ei]+bias;
-      let g=255*Math.pow(data[hasOffset?si+1:i+1]/255,1/gamma)+errs[ei+1]+bias;
-      let b=255*Math.pow(data[hasOffset?si+2:i+2]/255,1/gamma)+errs[ei+2]+bias;
+      let r=255*Math.pow(data[i]/255,1/gamma)+errs[ei]+bias;
+      let g=255*Math.pow(data[i+1]/255,1/gamma)+errs[ei+1]+bias;
+      let b=255*Math.pow(data[i+2]/255,1/gamma)+errs[ei+2]+bias;
       r=(r+brightness-128)*contF+128;g=(g+brightness-128)*contF+128;b=(b+brightness-128)*contF+128;
       if(invert){r=255-r;g=255-g;b=255-b;}
       // Color modes
