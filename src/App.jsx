@@ -300,8 +300,8 @@ function applyGlitch(ctx,canvas,src,fx,t){
   if(fx.glitch?.on&&(fx.glitch.intensity??0)>0){const int=fx.glitch.intensity,bh=fx.glitch.blockSize??8,spd=fx.glitch.speed??0.5;const gt=t*spd;for(let y=0;y<h;y+=bh){const rnd=Math.abs(Math.sin(gt*2.1+y*0.37)*Math.cos(gt*1.3+y*0.13));if(rnd>1-int){const shift=Math.round((Math.sin(gt*1.7+y*0.73)-0.5)*int*w*0.3),bht=Math.min(bh,h-y);if(bht>0)try{const bd=ctx.getImageData(0,y,w,bht);ctx.clearRect(0,y,w,bht);ctx.putImageData(bd,shift,y);}catch(e){}}}}
   if(fx.blockGlitch?.on&&(fx.blockGlitch.count??0)>0){const count=fx.blockGlitch.count,maxSz=fx.blockGlitch.maxSize??50,spd=fx.blockGlitch.speed??0.5,bt=t*spd;for(let i=0;i<count;i++){const s1=Math.abs(Math.sin(bt*2.7+i*73.1+0.5)*43758.5453)%1,s2=Math.abs(Math.cos(bt*3.1+i*91.7+0.3)*28001.8384)%1,s3=Math.abs(Math.sin(bt*1.3+i*47.3+0.7)*17943.2846)%1,s4=Math.abs(Math.cos(bt*4.1+i*31.9+0.1)*36712.9182)%1;const bx=Math.floor(s1*w*0.8),by=Math.floor(s2*h*0.8),bw=Math.max(8,Math.floor(s3*maxSz)),bh2=Math.max(4,Math.floor(s4*maxSz*0.4)),sw2=Math.min(bw,w-bx-1),sh2=Math.min(bh2,h-by-1);if(sw2>1&&sh2>1)try{const bl=ctx.getImageData(bx,by,sw2,sh2);ctx.putImageData(bl,bx+Math.round((Math.sin(bt*5+i*13)*0.5+0.5)*60-30),by+Math.round((Math.cos(bt*3+i*17)*0.5+0.5)*20-10));}catch(e){}}}
   if(fx.jitter?.on&&(fx.jitter.amount??0)>0){const amt=fx.jitter.amount,spd=fx.jitter.speed??1,jt=t*spd,id=ctx.getImageData(0,0,w,h),od=ctx.createImageData(w,h);for(let y=0;y<h;y++){const n=Math.sin(y*0.7+jt*15)*Math.cos(y*0.3+jt*8),j=Math.round(n*amt*(0.4+0.6*Math.abs(Math.sin(y*0.05+jt*3))));for(let x=0;x<w;x++){const sx=Math.max(0,Math.min(w-1,x+j)),si=(y*w+sx)*4,di=(y*w+x)*4;od.data[di]=id.data[si];od.data[di+1]=id.data[si+1];od.data[di+2]=id.data[si+2];od.data[di+3]=id.data[si+3];}}ctx.putImageData(od,0,0);}
-  // Color Cycle — palette rotation applied in pipeline, not here
-  // Solarize — animated threshold sweep applied in pipeline, not here
+  // Color Cycle — hue rotation applied on source before dithering
+  // Solarize — animated threshold sweep applied after dithering
   if(fx.scanlines?.on){const gap=fx.scanlines.gap??2,op=fx.scanlines.opacity??0.3,off=Math.floor(t*(fx.scanlines.speed??0)*50)%(gap+1);ctx.fillStyle=`rgba(0,0,0,${op})`;for(let y=off;y<h;y+=gap+1)ctx.fillRect(0,y,w,1);}
   if(fx.noise?.on&&(fx.noise.amount??0)>0){const id=ctx.getImageData(0,0,w,h),amt=fx.noise.amount,tt=Math.floor(t*(fx.noise.speed??0.3)*30);for(let i=0;i<id.data.length;i+=4){const n=((Math.sin((i+tt)*12.9898+78.233)*43758.5453)%1)*amt*255;id.data[i]=Math.max(0,Math.min(255,id.data[i]+n));id.data[i+1]=Math.max(0,Math.min(255,id.data[i+1]+n));id.data[i+2]=Math.max(0,Math.min(255,id.data[i+2]+n));}ctx.putImageData(id,0,0);}
   if(fx.vignette?.on&&(fx.vignette.strength??0)>0){const gr=ctx.createRadialGradient(w/2,h/2,w*0.2,w/2,h/2,w*0.75);gr.addColorStop(0,"rgba(0,0,0,0)");gr.addColorStop(1,`rgba(0,0,0,${fx.vignette.strength})`);ctx.fillStyle=gr;ctx.fillRect(0,0,w,h);}
@@ -580,6 +580,40 @@ export default function UESCProcessor(){
       w=Math.max(1,Math.round(ew*Math.min(sc,scale)));h=Math.max(1,Math.round(eh*Math.min(sc,scale)));
     }
     src.width=w;src.height=h;src.getContext("2d").drawImage(actualSource,0,0,w,h);
+
+    // --- Pre-dither animation: Color Cycle (hue rotate source BEFORE dithering) ---
+    if(P.gfx.colorCycle?.on){
+      const spd=P.gfx.colorCycle.speed??1;
+      const hueShift=time*spd*60; // degrees per second
+      const id=src.getContext("2d").getImageData(0,0,w,h);
+      const d=id.data;
+      for(let i=0;i<d.length;i+=4){
+        let r=d[i],g=d[i+1],b=d[i+2];
+        // RGB -> HSL
+        const rn=r/255,gn=g/255,bn=b/255;
+        const mx=Math.max(rn,gn,bn),mn=Math.min(rn,gn,bn),dl=mx-mn;
+        let h=0,s=0,l=(mx+mn)/2;
+        if(dl>0){
+          s=l>0.5?dl/(2-mx-mn):dl/(mx+mn);
+          if(mx===rn)h=((gn-bn)/dl+(gn<bn?6:0))/6;
+          else if(mx===gn)h=((bn-rn)/dl+2)/6;
+          else h=((rn-gn)/dl+4)/6;
+        }
+        // Shift hue
+        h=((h*360+hueShift)%360)/360;
+        if(h<0)h+=1;
+        // HSL -> RGB
+        if(s===0){r=g=b=Math.round(l*255);}
+        else{
+          const hue2rgb=(p2,q2,t2)=>{if(t2<0)t2+=1;if(t2>1)t2-=1;if(t2<1/6)return p2+(q2-p2)*6*t2;if(t2<1/2)return q2;if(t2<2/3)return p2+(q2-p2)*(2/3-t2)*6;return p2;};
+          const q=l<0.5?l*(1+s):l+s-l*s,p=2*l-q;
+          r=Math.round(hue2rgb(p,q,h+1/3)*255);g=Math.round(hue2rgb(p,q,h)*255);b=Math.round(hue2rgb(p,q,h-1/3)*255);
+        }
+        d[i]=r;d[i+1]=g;d[i+2]=b;
+      }
+      src.getContext("2d").putImageData(id,0,0);
+    }
+
     const pal=getPal(P.palette,P.customColors);
     // Compute dither offset animation
     const oFx=P.gfx.offset;
@@ -607,44 +641,17 @@ export default function UESCProcessor(){
     }
     else{dith.width=w;dith.height=h;dith.getContext("2d").drawImage(src,0,0);}
 
-    // --- Pipeline animations: Color Cycle (palette rotation) & Solarize (sweep) ---
-    const hasCycle = P.gfx.colorCycle?.on;
-    const hasSolar = P.gfx.solarize?.on;
-    if((hasCycle || hasSolar) && dith.width > 0){
-      const pal = getPal(P.palette, P.customColors);
+    // --- Post-dither animation: Solarize (sweep) ---
+    if(P.gfx.solarize?.on && dith.width > 0){
       const id = dith.getContext("2d").getImageData(0, 0, dith.width, dith.height);
       const d = id.data;
-
-      if(hasCycle && pal && pal.length > 1){
-        // Rotate palette indices: find closest palette index for each pixel, shift by time
-        const shift = Math.floor(time * (P.gfx.colorCycle.speed ?? 1) * 3) % pal.length;
-        if(shift !== 0){
-          for(let i = 0; i < d.length; i += 4){
-            // Find which palette index this pixel is closest to
-            let bestIdx = 0, bestDist = Infinity;
-            for(let j = 0; j < pal.length; j++){
-              const dr = d[i]-pal[j][0], dg = d[i+1]-pal[j][1], db = d[i+2]-pal[j][2];
-              const dist = dr*dr + dg*dg + db*db;
-              if(dist < bestDist){ bestDist = dist; bestIdx = j; }
-            }
-            // Map to shifted palette index
-            const newIdx = (bestIdx + shift) % pal.length;
-            d[i] = pal[newIdx][0]; d[i+1] = pal[newIdx][1]; d[i+2] = pal[newIdx][2];
-          }
-        }
+      const baseT = P.gfx.solarize.threshold ?? 128;
+      const sweep = Math.sin(time * (P.gfx.solarize.speed ?? 0.5) * Math.PI) * 127;
+      const thr = Math.max(0, Math.min(255, baseT + sweep));
+      for(let i = 0; i < d.length; i += 4){
+        const lum = d[i]*0.299 + d[i+1]*0.587 + d[i+2]*0.114;
+        if(lum > thr){ d[i] = 255 - d[i]; d[i+1] = 255 - d[i+1]; d[i+2] = 255 - d[i+2]; }
       }
-
-      if(hasSolar){
-        // Animated solarization: threshold sweeps up and down over time
-        const baseT = P.gfx.solarize.threshold ?? 128;
-        const sweep = Math.sin(time * (P.gfx.solarize.speed ?? 0.5) * Math.PI) * 127;
-        const thr = Math.max(0, Math.min(255, baseT + sweep));
-        for(let i = 0; i < d.length; i += 4){
-          const lum = d[i]*0.299 + d[i+1]*0.587 + d[i+2]*0.114;
-          if(lum > thr){ d[i] = 255 - d[i]; d[i+1] = 255 - d[i+1]; d[i+2] = 255 - d[i+2]; }
-        }
-      }
-
       dith.getContext("2d").putImageData(id, 0, 0);
     }
 
