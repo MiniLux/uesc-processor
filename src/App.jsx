@@ -392,7 +392,7 @@ function ColorSwatch({color,onChange,onRemove}){
 // --- MAIN ---
 export default function UESCProcessor(){
   const[imageEl,setImageEl]=useState(null);const[mediaType,setMediaType]=useState(null);const[videoEl,setVideoEl]=useState(null);const[videoPlaying,setVideoPlaying]=useState(false);
-  const[animate,setAnimate]=useState(true);const[showPanel,setShowPanel]=useState(true);const[err,setErr]=useState(null);const[recording,setRecording]=useState(false);const[recFmt,setRecFmt]=useState("webm");
+  const[animate,setAnimate]=useState(true);const[showPanel,setShowPanel]=useState(true);const[err,setErr]=useState(null);const[recording,setRecording]=useState(false);const[recFmt,setRecFmt]=useState("webm");const[recDur,setRecDur]=useState(5);const[recProgress,setRecProgress]=useState(0);
   const[palette,setPalette]=useState("Original");
   const[customColors,setCustomColors]=useState(["#000000","#00ff41"]);
   const[ditherAlgo,setDitherAlgo]=useState("None");
@@ -567,7 +567,7 @@ export default function UESCProcessor(){
     else{if(ascii)ascii.style.display="none";disp.style.display="block";disp.width=w;disp.height=h;const hasG=Object.values(P.gfx).some(v=>typeof v==="object"&&v?.on);if(hasG)applyGlitch(disp.getContext("2d"),disp,dith,P.gfx,time);else disp.getContext("2d").drawImage(dith,0,0);}
   },[getPal]);
 
-  useEffect(()=>{if(!imageEl||videoPlaying)return;t0Ref.current=performance.now();let r=true;const loop=()=>{if(!r)return;renderFrame(imageEl,animate?(performance.now()-t0Ref.current)/1000:0);animRef.current=requestAnimationFrame(loop);};loop();return()=>{r=false;cancelAnimationFrame(animRef.current);};},[imageEl,animate,renderFrame,videoPlaying,palette,customColors,ditherAlgo,dp,asciiMode,asciiCols,asciiInvert,gfx,cam3d]);
+  useEffect(()=>{if(!imageEl||videoPlaying||recording)return;t0Ref.current=performance.now();let r=true;const loop=()=>{if(!r)return;renderFrame(imageEl,animate?(performance.now()-t0Ref.current)/1000:0);animRef.current=requestAnimationFrame(loop);};loop();return()=>{r=false;cancelAnimationFrame(animRef.current);};},[imageEl,animate,renderFrame,videoPlaying,recording,palette,customColors,ditherAlgo,dp,asciiMode,asciiCols,asciiInvert,gfx,cam3d]);
   useEffect(()=>{if(!videoEl||!videoPlaying)return;videoEl.play().catch(()=>{});t0Ref.current=performance.now();let r=true;const loop=()=>{if(!r)return;if(videoEl.paused||videoEl.ended){setVideoPlaying(false);return;}renderFrame(videoEl,(performance.now()-t0Ref.current)/1000);vidRef.current=requestAnimationFrame(loop);};loop();return()=>{r=false;cancelAnimationFrame(vidRef.current);videoEl.pause();};},[videoEl,videoPlaying,renderFrame]);
 
   const loadGlitchPreset=(k)=>{setGlitchPreset(k);const p=GLITCH_PRESETS[k];const g={...GFX0};for(const key of Object.keys(p)){if(key!=="name"&&typeof p[key]==="object")g[key]={...GFX0[key],...p[key]};}setGfx(g);};
@@ -575,27 +575,68 @@ export default function UESCProcessor(){
   const loadMarathonPreset=(name)=>{const p=MARATHON_PRESETS[name];if(!p)return;setPalette(p.palette);setDitherAlgo(p.dither);setDp({...DP0,...p.dp});setGfx(structuredClone(p.gfx));setGlitchPreset("custom");};
 
   const doExportPng=()=>{const c=asciiMode!=="off"?asciiRef.current:dispRef.current;if(!c||!c.width)return;const link=document.createElement("a");link.download=`UESC_${Date.now()}.png`;link.href=c.toDataURL("image/png");document.body.appendChild(link);link.click();document.body.removeChild(link);};
-  const startRec=()=>{const c=asciiMode!=="off"?asciiRef.current:dispRef.current;if(!c)return;chunksRef.current=[];
-    const fmt=recFmt;
-    // Determine mime type - try mp4 first if requested, fallback to webm
-    let mime,ext;
+  // --- OFFLINE FRAME-BY-FRAME RENDER (no dropped frames) ---
+  const startRec=()=>{
+    const sourceEl=imageEl;if(!sourceEl)return;
+    const c=asciiMode!=="off"?asciiRef.current:dispRef.current;if(!c)return;
+    // Determine format
+    const fmt=recFmt;let mime,ext;
     if(fmt==="mp4"){
-      if(MediaRecorder.isTypeSupported("video/mp4;codecs=avc1"))      {mime="video/mp4;codecs=avc1";ext="mp4";}
-      else if(MediaRecorder.isTypeSupported("video/mp4"))             {mime="video/mp4";ext="mp4";}
-      else if(MediaRecorder.isTypeSupported("video/webm;codecs=h264")){mime="video/webm;codecs=h264";ext="webm";}
-      else{mime="video/webm;codecs=vp9";ext="webm";setErr("MP4 not supported, recording as WebM");}
+      if(MediaRecorder.isTypeSupported("video/mp4;codecs=avc1")){mime="video/mp4;codecs=avc1";ext="mp4";}
+      else if(MediaRecorder.isTypeSupported("video/mp4")){mime="video/mp4";ext="mp4";}
+      else{mime="video/webm;codecs=vp9";ext="webm";setErr("MP4 not supported, using WebM");}
     } else {
       mime=MediaRecorder.isTypeSupported("video/webm;codecs=vp9")?"video/webm;codecs=vp9":"video/webm";ext="webm";
     }
-    try{
-      const stream=c.captureStream(60);
-      const mr=new MediaRecorder(stream,{mimeType:mime,videoBitsPerSecond:8e6});
-      mr.ondataavailable=(e)=>{if(e.data.size>0)chunksRef.current.push(e.data);};
-      mr.onstop=()=>{const blob=new Blob(chunksRef.current,{type:mime});const url=URL.createObjectURL(blob);const a=document.createElement("a");a.href=url;a.download=`UESC_${Date.now()}.${ext}`;document.body.appendChild(a);a.click();document.body.removeChild(a);URL.revokeObjectURL(url);setRecording(false);};
-      mr.start();recorderRef.current=mr;setRecording(true);if(!animate)setAnimate(true);
-    }catch(e2){setErr("Recording not supported in this browser");}
+
+    setRecording(true);setRecProgress(0);
+    chunksRef.current=[];
+
+    // Use captureStream(0) = manual frame mode
+    const stream=c.captureStream(0);
+    const track=stream.getVideoTracks()[0];
+    const mr=new MediaRecorder(stream,{mimeType:mime,videoBitsPerSecond:12e6});
+    mr.ondataavailable=(e)=>{if(e.data.size>0)chunksRef.current.push(e.data);};
+    mr.onstop=()=>{
+      const blob=new Blob(chunksRef.current,{type:mime});
+      const url=URL.createObjectURL(blob);
+      const a=document.createElement("a");a.href=url;a.download=`UESC_${Date.now()}.${ext}`;
+      document.body.appendChild(a);a.click();document.body.removeChild(a);
+      URL.revokeObjectURL(url);setRecording(false);setRecProgress(0);
+    };
+    mr.start();
+    recorderRef.current=mr;
+
+    // Offline render loop: render each frame at exact time, then advance
+    const fps=60;
+    const totalFrames=Math.round(recDur*fps);
+    let frame=0;
+
+    const renderNext=()=>{
+      if(frame>=totalFrames||!recorderRef.current||recorderRef.current.state!=="recording"){
+        if(recorderRef.current?.state==="recording")recorderRef.current.stop();
+        return;
+      }
+      const t=frame/fps;
+      // Render this exact frame
+      if(threeRef.current){
+        renderFrame(sourceEl,t);
+      } else {
+        renderFrame(sourceEl,t);
+      }
+      // Signal the stream to capture this frame
+      if(track.requestFrame)track.requestFrame();
+      frame++;
+      setRecProgress(Math.round(frame/totalFrames*100));
+      // Use setTimeout(0) to let the browser breathe + encoder catch up
+      setTimeout(renderNext,0);
+    };
+    // Start after a tick so MediaRecorder is ready
+    setTimeout(renderNext,100);
   };
-  const stopRec=()=>{if(recorderRef.current?.state==="recording")recorderRef.current.stop();};
+  const stopRec=()=>{
+    if(recorderRef.current?.state==="recording")recorderRef.current.stop();
+  };
 
   const onWheel=useCallback((e)=>{e.preventDefault();
     if(mediaType==="3d"){const nd=Math.max(0.5,Math.min(15,orbitRef.current.dist*(e.deltaY>0?1.08:0.92)));orbitRef.current.dist=nd;setCam3d(p=>({...p,dist:Math.round(nd*10)/10}));return;}
@@ -714,13 +755,18 @@ export default function UESCProcessor(){
 
           <Sec title="Animation" defaultOpen={false}><Tog label={"\u25B6 Animate"} value={animate} onChange={setAnimate}/><div style={{fontSize:8,opacity:0.25,marginTop:2}}>Time-based effects. Canvas always live.</div></Sec>
         </div>
-        <div style={{padding:"6px 12px",borderTop:"1px solid #1a1a1a",display:"flex",gap:4,alignItems:"center"}}>
-          <button onClick={doExportPng} disabled={!imageEl} style={{flex:1,padding:"6px 0",fontSize:9,fontFamily:"inherit",letterSpacing:1,fontWeight:"bold",background:imageEl?"#ccc":"#222",color:"#0a0a0a",border:"none",borderRadius:2,cursor:imageEl?"pointer":"default",opacity:imageEl?1:0.3}}>PNG</button>
-          <select value={recFmt} onChange={e=>setRecFmt(e.target.value)} disabled={recording} style={{padding:"5px 3px",fontSize:9,fontFamily:"inherit",background:"#111",color:"#aaa",border:"1px solid #333",borderRadius:2,cursor:"pointer",outline:"none"}}>
-            <option value="webm">WEBM</option>
-            <option value="mp4">MP4</option>
-          </select>
-          <button onClick={recording?stopRec:startRec} disabled={!imageEl} style={{flex:1,padding:"6px 0",fontSize:9,fontFamily:"inherit",letterSpacing:1,fontWeight:"bold",background:recording?"#ff4040":imageEl?"#888":"#222",color:recording?"#fff":"#0a0a0a",border:"none",borderRadius:2,cursor:imageEl?"pointer":"default",opacity:imageEl?1:0.3}}>{recording?"\u23F9 STOP":"\u25CF REC"}</button>
+        <div style={{padding:"6px 12px",borderTop:"1px solid #1a1a1a",display:"flex",flexDirection:"column",gap:4}}>
+          {recording&&<div style={{width:"100%",height:3,background:"#222",borderRadius:2,overflow:"hidden"}}><div style={{width:`${recProgress}%`,height:"100%",background:"#ff4040",transition:"width 0.1s"}}/></div>}
+          {recording&&<div style={{fontSize:8,color:"#888",textAlign:"center"}}>{recProgress}% — Rendering {recDur}s @ 60fps ({Math.round(recDur*60)} frames)</div>}
+          {!recording&&<Rng label="Duration" value={recDur} min={1} max={30} step={0.5} suffix="s" onChange={v=>setRecDur(v)}/>}
+          <div style={{display:"flex",gap:4,alignItems:"center"}}>
+            <button onClick={doExportPng} disabled={!imageEl||recording} style={{flex:1,padding:"6px 0",fontSize:9,fontFamily:"inherit",letterSpacing:1,fontWeight:"bold",background:imageEl&&!recording?"#ccc":"#222",color:"#0a0a0a",border:"none",borderRadius:2,cursor:imageEl&&!recording?"pointer":"default",opacity:imageEl&&!recording?1:0.3}}>PNG</button>
+            <select value={recFmt} onChange={e=>setRecFmt(e.target.value)} disabled={recording} style={{padding:"5px 3px",fontSize:9,fontFamily:"inherit",background:"#111",color:"#aaa",border:"1px solid #333",borderRadius:2,cursor:"pointer",outline:"none"}}>
+              <option value="webm">WEBM</option>
+              <option value="mp4">MP4</option>
+            </select>
+            <button onClick={recording?stopRec:startRec} disabled={!imageEl} style={{flex:1,padding:"6px 0",fontSize:9,fontFamily:"inherit",letterSpacing:1,fontWeight:"bold",background:recording?"#ff4040":imageEl?"#888":"#222",color:recording?"#fff":"#0a0a0a",border:"none",borderRadius:2,cursor:imageEl?"pointer":"default",opacity:imageEl?1:0.3}}>{recording?"\u23F9 STOP":"\u25CF REC"}</button>
+          </div>
         </div>
       </div>)}
 
