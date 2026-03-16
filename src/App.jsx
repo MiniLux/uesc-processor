@@ -577,9 +577,20 @@ export default function UESCProcessor(){
   const startRec=()=>{
     const sourceEl=imageEl;if(!sourceEl)return;
 
-    // Parse resolution
-    const [rw,rh]=recRes.split("x").map(Number);
-    if(!rw||!rh)return;
+    // Parse max resolution and fit to source aspect ratio
+    const [maxW,maxH]=recRes.split("x").map(Number);
+    if(!maxW||!maxH)return;
+    const srcW=sourceEl.videoWidth||sourceEl.naturalWidth||sourceEl.width;
+    const srcH=sourceEl.videoHeight||sourceEl.naturalHeight||sourceEl.height;
+    const srcAspect=srcW/srcH;
+    // For 3D, use viewport aspect
+    const vpEl=viewportRef.current;
+    const aspect=threeRef.current?(vpEl?vpEl.clientWidth/vpEl.clientHeight:4/3):srcAspect;
+    // Fit within maxW x maxH keeping aspect ratio, round to even (codec requirement)
+    let rw,rh;
+    if(aspect>=maxW/maxH){rw=maxW;rh=Math.round(maxW/aspect);}
+    else{rh=maxH;rw=Math.round(maxH*aspect);}
+    rw=rw-(rw%2);rh=rh-(rh%2); // ensure even dimensions
 
     // Determine format
     const fmt=recFmt;let mime,ext;
@@ -775,11 +786,11 @@ export default function UESCProcessor(){
         </div>
         <div style={{padding:"6px 12px",borderTop:"1px solid #1a1a1a",display:"flex",flexDirection:"column",gap:4}}>
           {recording&&<div style={{width:"100%",height:3,background:"#222",borderRadius:2,overflow:"hidden"}}><div style={{width:`${recProgress}%`,height:"100%",background:"#ff4040",transition:"width 0.1s"}}/></div>}
-          {recording&&<div style={{fontSize:8,color:"#888",textAlign:"center"}}>{recProgress}% — Rendering {recRes} {recDur}s @ 60fps (real-time)</div>}
+          {recording&&<div style={{fontSize:8,color:"#888",textAlign:"center"}}>{recProgress}% — Rendering {recDur}s @ 60fps (real-time)</div>}
           {!recording&&<>
             <Rng label="Duration" value={recDur} min={1} max={30} step={0.5} suffix="s" onChange={v=>setRecDur(v)}/>
             <div style={{display:"flex",gap:4,alignItems:"center",marginBottom:2}}>
-              <span style={{fontSize:9,opacity:0.4,letterSpacing:"0.05em"}}>RES</span>
+              <span style={{fontSize:9,opacity:0.4,letterSpacing:"0.05em"}}>MAX</span>
               {["3840x2160","1920x1080","1280x720","800x600"].map(r=>(
                 <button key={r} onClick={()=>setRecRes(r)} style={{padding:"2px 5px",fontSize:8,fontFamily:"inherit",background:recRes===r?"#ccc":"transparent",color:recRes===r?"#0a0a0a":"#666",border:`1px solid ${recRes===r?"#ccc":"#333"}`,borderRadius:2,cursor:"pointer"}}>{r.split("x")[1]}p</button>
               ))}
