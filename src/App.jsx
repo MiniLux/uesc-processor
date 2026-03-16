@@ -46,7 +46,7 @@ const MARATHON_PRESETS = {
   "Leela Neon":{palette:"Leela Pink",dither:"Halftone",dp:{...DP0,gamma:1.1,htAngle:45,dotGain:10,dotSize:1.2,brightness:5,contrast:5},gfx:{scanlines:{on:true,gap:2,opacity:0.3,speed:0.1},glitch:{on:true,intensity:0.2,blockSize:8,speed:0.6},rgbShift:{on:true,amount:4,angle:60},noise:{on:true,amount:0.08,speed:0.4},pixelate:{on:false,size:1},vignette:{on:true,strength:0.5},crt:{on:false,curvature:0.15},blockGlitch:{on:false,count:8,maxSize:40},chromatic:{on:true,amount:4},jitter:{on:false,amount:2},colorCycle:{on:false,speed:1},solarize:{on:false,threshold:128,speed:0.5}}},
 };
 
-const GFX0 = {scanlines:{on:false,gap:2,opacity:0.3,speed:0},glitch:{on:false,intensity:0.15,blockSize:8,speed:0.5},rgbShift:{on:false,amount:3,angle:0,speed:0.5},noise:{on:false,amount:0.06,speed:0.3},pixelate:{on:false,size:2},vignette:{on:false,strength:0.4},crt:{on:false,curvature:0.2},blockGlitch:{on:false,count:10,maxSize:50,speed:0.5},chromatic:{on:false,amount:3,speed:0.5},jitter:{on:false,amount:3,speed:1},colorCycle:{on:false,speed:1},solarize:{on:false,threshold:128,speed:0.5},offset:{on:false,speedX:0.5,speedY:0,amount:50,direction:0},multicolor:{on:false,patchSize:20,speed:0.5}};
+const GFX0 = {scanlines:{on:false,gap:2,opacity:0.3,speed:0},glitch:{on:false,intensity:0.15,blockSize:8,speed:0.5},rgbShift:{on:false,amount:3,angle:0,speed:0.5},noise:{on:false,amount:0.06,speed:0.3},pixelate:{on:false,size:2},vignette:{on:false,strength:0.4},crt:{on:false,curvature:0.2},blockGlitch:{on:false,count:10,maxSize:50,speed:0.5},chromatic:{on:false,amount:3,speed:0.5},jitter:{on:false,amount:3,speed:1},colorCycle:{on:false,speed:1},solarize:{on:false,threshold:128,speed:0.5},offset:{on:false,speedX:0.5,speedY:0,amount:50,direction:0},multicolor:{on:false,patchSize:20,speed:0.5,shape:0}};
 const GLITCH_PRESETS = {
   off:{name:"OFF",...GFX0},
   marathon:{name:"MARATHON",...GFX0,scanlines:{on:true,gap:2,opacity:0.35,speed:0},glitch:{on:true,intensity:0.12,blockSize:8,speed:0.4},rgbShift:{on:true,amount:3,angle:0},noise:{on:true,amount:0.06,speed:0.3},vignette:{on:true,strength:0.45}},
@@ -523,7 +523,7 @@ function ditherImage(srcData,w,h,algo,palette,p,offsetX,offsetY){
 }
 
 // --- GLITCH ENGINE ---
-function applyGlitch(ctx,canvas,src,fx,t,pal){
+function applyGlitch(ctx,canvas,src,fx,t,pal,mcSvgMask){
   const w=canvas.width,h=canvas.height;ctx.drawImage(src,0,0,w,h);
   if(fx.crt?.on&&fx.crt.curvature>0){const k=fx.crt.curvature*0.5,id=ctx.getImageData(0,0,w,h),od=ctx.createImageData(w,h),cx=w/2,cy=h/2;for(let y=0;y<h;y++)for(let x=0;x<w;x++){const nx2=(x-cx)/cx,ny2=(y-cy)/cy,r2=nx2*nx2+ny2*ny2,d2=1+r2*k,sx=Math.round(nx2*d2*cx+cx),sy=Math.round(ny2*d2*cy+cy),di=(y*w+x)*4;if(sx>=0&&sx<w&&sy>=0&&sy<h){const si=(sy*w+sx)*4;od.data[di]=id.data[si];od.data[di+1]=id.data[si+1];od.data[di+2]=id.data[si+2];od.data[di+3]=id.data[si+3];}else od.data[di+3]=255;}ctx.putImageData(od,0,0);}
   if(fx.pixelate?.on&&(fx.pixelate.size??1)>1){const s=fx.pixelate.size,tc=document.createElement("canvas");tc.width=Math.ceil(w/s);tc.height=Math.ceil(h/s);const tx=tc.getContext("2d");tx.imageSmoothingEnabled=false;tx.drawImage(canvas,0,0,tc.width,tc.height);ctx.imageSmoothingEnabled=false;ctx.clearRect(0,0,w,h);ctx.drawImage(tc,0,0,w,h);ctx.imageSmoothingEnabled=true;}
@@ -537,28 +537,59 @@ function applyGlitch(ctx,canvas,src,fx,t,pal){
   if(fx.scanlines?.on){const gap=fx.scanlines.gap??2,op=fx.scanlines.opacity??0.3,off=Math.floor(t*(fx.scanlines.speed??0)*50)%(gap+1);ctx.fillStyle=`rgba(0,0,0,${op})`;for(let y=off;y<h;y+=gap+1)ctx.fillRect(0,y,w,1);}
   if(fx.noise?.on&&(fx.noise.amount??0)>0){const id=ctx.getImageData(0,0,w,h),amt=fx.noise.amount,tt=Math.floor(t*(fx.noise.speed??0.3)*30);for(let i=0;i<id.data.length;i+=4){const n=((Math.sin((i+tt)*12.9898+78.233)*43758.5453)%1)*amt*255;id.data[i]=Math.max(0,Math.min(255,id.data[i]+n));id.data[i+1]=Math.max(0,Math.min(255,id.data[i+1]+n));id.data[i+2]=Math.max(0,Math.min(255,id.data[i+2]+n));}ctx.putImageData(id,0,0);}
 
-  // Multicolor patches: tint blocks with random palette colors
+  // Multicolor patches: tint blocks with random palette colors + shape mask
   if(fx.multicolor?.on&&pal&&pal.length>1){
     const ps=Math.max(4,fx.multicolor.patchSize??20);
     const spd=fx.multicolor.speed??0.5;
+    const shape=fx.multicolor.shape??0; // 0=square,1=rect,2=circle,3=svg
     const mt=t*spd;
     const id=ctx.getImageData(0,0,w,h);const d=id.data;
-    const cols=Math.ceil(w/ps),rows=Math.ceil(h/ps);
+
+    // Patch dimensions based on shape
+    const pw=shape===1?ps*2:ps; // rectangle = 2x wide
+    const ph=ps;
+
+    // Build SVG mask bitmap if shape=3 and SVG available
+    let svgMask=null;
+    if(shape===3&&mcSvgMask){
+      const mc=document.createElement("canvas");mc.width=pw;mc.height=ph;
+      const mx=mc.getContext("2d");
+      mx.clearRect(0,0,pw,ph);
+      mx.drawImage(mcSvgMask,0,0,pw,ph);
+      const md=mx.getImageData(0,0,pw,ph);
+      svgMask=new Uint8Array(pw*ph);
+      for(let j=0;j<pw*ph;j++)svgMask[j]=(md.data[j*4]+md.data[j*4+1]+md.data[j*4+2])>100||(md.data[j*4+3]>128)?1:0;
+    }
+
+    // Circle: precompute center and radius
+    const cx2=pw/2,cy2=ph/2,rad=Math.min(pw,ph)/2;
+
+    const cols=Math.ceil(w/pw),rows=Math.ceil(h/ph);
     for(let by=0;by<rows;by++){
       for(let bx=0;bx<cols;bx++){
-        // Seeded random per block+time: pick a palette color
         const seed=Math.abs(Math.sin((bx+1)*127.1+(by+1)*311.7+Math.floor(mt*3)*73.13)*43758.5453)%1;
         const ci=Math.floor(seed*pal.length)%pal.length;
         const cr=pal[ci][0],cg=pal[ci][1],cb=pal[ci][2];
-        const x0=bx*ps,y0=by*ps;
-        const x1=Math.min(x0+ps,w),y1=Math.min(y0+ps,h);
+        const x0=bx*pw,y0=by*ph;
+        const x1=Math.min(x0+pw,w),y1=Math.min(y0+ph,h);
         for(let y=y0;y<y1;y++){
           for(let x=x0;x<x1;x++){
+            // Shape mask check
+            const lx=x-x0,ly=y-y0;
+            let inShape=true;
+            if(shape===2){
+              // Circle
+              const dx2=lx-cx2,dy2=ly-cy2;
+              inShape=(dx2*dx2+dy2*dy2)<=(rad*rad);
+            } else if(shape===3&&svgMask){
+              inShape=!!svgMask[ly*pw+lx];
+            }
+            // shape 0 (square) and 1 (rect) = always in shape
+            if(!inShape)continue;
+
             const i=(y*w+x)*4;
-            // Only tint non-black pixels (preserve dark background)
             const lum=d[i]*0.299+d[i+1]*0.587+d[i+2]*0.114;
             if(lum>10){
-              // Tint: blend pixel luminance with palette color
               const l=lum/255;
               d[i]=Math.round(cr*l);d[i+1]=Math.round(cg*l);d[i+2]=Math.round(cb*l);
             }
@@ -743,6 +774,7 @@ export default function UESCProcessor(){
   const fileRef=useRef(null);const animRef=useRef(null);const vidRef=useRef(null);const t0Ref=useRef(0);
   const recorderRef=useRef(null);const chunksRef=useRef([]);
   const[audioFile,setAudioFile]=useState(null);const[audioName,setAudioName]=useState("");const audioDataRef=useRef(null);const audioFileRef=useRef(null);
+  const mcSvgMaskRef=useRef(null);const mcSvgFileRef=useRef(null);const[mcSvgName,setMcSvgName]=useState("");
 
   const pRef=useRef({palette,customColors,ditherAlgo,dp,asciiMode,asciiCols,asciiInvert,gfx,cam3d});
   pRef.current={palette,customColors,ditherAlgo,dp,asciiMode,asciiCols,asciiInvert,gfx,cam3d};
@@ -799,6 +831,22 @@ export default function UESCProcessor(){
     if(e.target?.value!==undefined)e.target.value="";
   },[]);
   const removeAudio=useCallback(()=>{setAudioFile(null);setAudioName("");audioDataRef.current=null;},[]);
+
+  // Multicolor SVG mask loading
+  const loadMcSvg=useCallback((e)=>{
+    const file=e.target?.files?.[0];if(!file)return;
+    setMcSvgName(file.name);
+    const reader=new FileReader();
+    reader.onload=(ev)=>{
+      const img=new Image();
+      img.onload=()=>{mcSvgMaskRef.current=img;};
+      img.onerror=()=>setErr("SVG mask load failed");
+      img.src=ev.target.result;
+    };
+    reader.readAsDataURL(file);
+    if(e.target?.value!==undefined)e.target.value="";
+  },[]);
+  const removeMcSvg=useCallback(()=>{setMcSvgName("");mcSvgMaskRef.current=null;},[]);
 
   const getPal=useCallback((palName,cc)=>{if(palName==="Original")return null;if(palName==="Custom")return cc.map(c=>{if(c.startsWith("#")&&c.length>=7)return[parseInt(c.slice(1,3),16),parseInt(c.slice(3,5),16),parseInt(c.slice(5,7),16)];return[0,0,0];});return PALETTES[palName];},[]);
 
@@ -921,8 +969,8 @@ export default function UESCProcessor(){
     }
 
     const chars=CHARSETS[P.asciiMode];
-    if(chars&&ascii){let cs=chars;if(P.asciiInvert)cs=cs.split("").reverse().join("");renderAscii(dith,ascii,cs,P.asciiCols);const hasG=Object.values(P.gfx).some(v=>typeof v==="object"&&v?.on);if(hasG){const tc=document.createElement("canvas");tc.width=ascii.width;tc.height=ascii.height;tc.getContext("2d").drawImage(ascii,0,0);applyGlitch(ascii.getContext("2d"),ascii,tc,P.gfx,time,pal);}if(!exportOverride){disp.style.display="none";ascii.style.display="block";}}
-    else{if(!exportOverride){if(ascii)ascii.style.display="none";disp.style.display="block";}disp.width=w;disp.height=h;const hasG=Object.values(P.gfx).some(v=>typeof v==="object"&&v?.on);if(hasG)applyGlitch(disp.getContext("2d"),disp,dith,P.gfx,time,pal);else disp.getContext("2d").drawImage(dith,0,0);}
+    if(chars&&ascii){let cs=chars;if(P.asciiInvert)cs=cs.split("").reverse().join("");renderAscii(dith,ascii,cs,P.asciiCols);const hasG=Object.values(P.gfx).some(v=>typeof v==="object"&&v?.on);if(hasG){const tc=document.createElement("canvas");tc.width=ascii.width;tc.height=ascii.height;tc.getContext("2d").drawImage(ascii,0,0);applyGlitch(ascii.getContext("2d"),ascii,tc,P.gfx,time,pal,mcSvgMaskRef.current);}if(!exportOverride){disp.style.display="none";ascii.style.display="block";}}
+    else{if(!exportOverride){if(ascii)ascii.style.display="none";disp.style.display="block";}disp.width=w;disp.height=h;const hasG=Object.values(P.gfx).some(v=>typeof v==="object"&&v?.on);if(hasG)applyGlitch(disp.getContext("2d"),disp,dith,P.gfx,time,pal,mcSvgMaskRef.current);else disp.getContext("2d").drawImage(dith,0,0);}
   },[getPal]);
 
   useEffect(()=>{if(!imageEl||videoPlaying||recording)return;t0Ref.current=performance.now();let r=true;const loop=()=>{if(!r)return;renderFrame(imageEl,animate?(performance.now()-t0Ref.current)/1000:0);animRef.current=requestAnimationFrame(loop);};loop();return()=>{r=false;cancelAnimationFrame(animRef.current);};},[imageEl,animate,renderFrame,videoPlaying,recording,palette,customColors,ditherAlgo,dp,asciiMode,asciiCols,asciiInvert,gfx,cam3d]);
@@ -1231,6 +1279,16 @@ export default function UESCProcessor(){
             <Tog label="Multicolor" value={gfx.multicolor?.on} onChange={v=>setFx("multicolor","on",v)}/>{gfx.multicolor?.on&&<>
               <Rng label="Patch Size" value={gfx.multicolor?.patchSize??20} min={4} max={80} step={1} onChange={v=>setFx("multicolor","patchSize",v)}/>
               <Rng label="Speed" value={gfx.multicolor?.speed??0.5} min={0} max={5} step={0.1} onChange={v=>setFx("multicolor","speed",v)}/>
+              <Sel label="Shape" value={String(gfx.multicolor?.shape??0)} onChange={v=>setFx("multicolor","shape",+v)} opts={[{v:"0",l:"Square"},{v:"1",l:"Rectangle"},{v:"2",l:"Circle"},{v:"3",l:"SVG Mask"}]}/>
+              {(gfx.multicolor?.shape??0)===3&&<div style={{display:"flex",gap:4,alignItems:"center",marginBottom:4}}>
+                <input ref={mcSvgFileRef} type="file" accept=".svg,image/svg+xml" onChange={loadMcSvg} style={{display:"none"}}/>
+                {mcSvgName?(<>
+                  <span style={{fontSize:8,color:"#aaa",flex:1,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{mcSvgName}</span>
+                  <button onClick={removeMcSvg} style={{padding:"1px 5px",fontSize:8,fontFamily:"inherit",background:"transparent",color:"#666",border:"1px solid #333",borderRadius:2,cursor:"pointer"}}>x</button>
+                </>):(
+                  <button onClick={()=>mcSvgFileRef.current?.click()} style={{flex:1,padding:"3px 0",fontSize:8,fontFamily:"inherit",background:"#111",color:"#666",border:"1px dashed #333",borderRadius:2,cursor:"pointer",letterSpacing:1}}>IMPORT SVG</button>
+                )}
+              </div>}
             </>}
             <Tog label="Offset Sweep" value={gfx.offset?.on} onChange={v=>setFx("offset","on",v)}/>{gfx.offset?.on&&<>
               <Rng label="Amount" value={gfx.offset?.amount??50} min={5} max={200} step={1} onChange={v=>setFx("offset","amount",v)}/>
