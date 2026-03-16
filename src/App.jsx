@@ -605,8 +605,11 @@ export default function UESCProcessor(){
     setRecording(true);setRecProgress(0);
     chunksRef.current=[];
 
-    const stream=outCanvas.captureStream(0);
-    const track=stream.getVideoTracks()[0];
+    // Use captureStream at target fps - MediaRecorder uses wall-clock timestamps,
+    // so we MUST pace frames at real-time intervals for correct playback speed
+    const fps=60;
+    const frameDuration=1000/fps; // ~16.67ms
+    const stream=outCanvas.captureStream(fps);
     const mr=new MediaRecorder(stream,{mimeType:mime,videoBitsPerSecond:16e6});
     mr.ondataavailable=(e)=>{if(e.data.size>0)chunksRef.current.push(e.data);};
     mr.onstop=()=>{
@@ -619,10 +622,10 @@ export default function UESCProcessor(){
     mr.start();
     recorderRef.current=mr;
 
-    const fps=60;
     const totalFrames=Math.round(recDur*fps);
     let frame=0;
     const expOverride={src:exSrc,dith:exDith,disp:exDisp,ascii:exAscii,w:rw,h:rh};
+    const recStartTime=performance.now();
 
     const renderNext=()=>{
       if(frame>=totalFrames||!recorderRef.current||recorderRef.current.state!=="recording"){
@@ -632,15 +635,20 @@ export default function UESCProcessor(){
       const t=frame/fps;
       renderFrame(sourceEl,t,expOverride);
 
-      // Composite final output: pick whichever canvas has the result
       const chars=CHARSETS[pRef.current.asciiMode];
       const resultCanvas=(chars)?exAscii:exDisp;
       outCtx.drawImage(resultCanvas,0,0,rw,rh);
 
-      if(track.requestFrame)track.requestFrame();
       frame++;
       setRecProgress(Math.round(frame/totalFrames*100));
-      setTimeout(renderNext,0);
+
+      // Pace frames to real-time: wait until the wall-clock time matches
+      // the expected time for this frame. This ensures MediaRecorder
+      // encodes at the correct playback speed.
+      const expectedTime=recStartTime+frame*frameDuration;
+      const now=performance.now();
+      const delay=Math.max(0,expectedTime-now);
+      setTimeout(renderNext,delay);
     };
     setTimeout(renderNext,100);
   };
@@ -767,7 +775,7 @@ export default function UESCProcessor(){
         </div>
         <div style={{padding:"6px 12px",borderTop:"1px solid #1a1a1a",display:"flex",flexDirection:"column",gap:4}}>
           {recording&&<div style={{width:"100%",height:3,background:"#222",borderRadius:2,overflow:"hidden"}}><div style={{width:`${recProgress}%`,height:"100%",background:"#ff4040",transition:"width 0.1s"}}/></div>}
-          {recording&&<div style={{fontSize:8,color:"#888",textAlign:"center"}}>{recProgress}% — Rendering {recRes} {recDur}s @ 60fps</div>}
+          {recording&&<div style={{fontSize:8,color:"#888",textAlign:"center"}}>{recProgress}% — Rendering {recRes} {recDur}s @ 60fps (real-time)</div>}
           {!recording&&<>
             <Rng label="Duration" value={recDur} min={1} max={30} step={0.5} suffix="s" onChange={v=>setRecDur(v)}/>
             <div style={{display:"flex",gap:4,alignItems:"center",marginBottom:2}}>
