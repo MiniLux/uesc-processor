@@ -458,7 +458,7 @@ function ColorSwatch({color,onChange,onRemove}){
 // --- MAIN ---
 export default function UESCProcessor(){
   const[imageEl,setImageEl]=useState(null);const[mediaType,setMediaType]=useState(null);const[videoEl,setVideoEl]=useState(null);const[videoPlaying,setVideoPlaying]=useState(false);
-  const[animate,setAnimate]=useState(true);const[showPanel,setShowPanel]=useState(true);const[err,setErr]=useState(null);const[recording,setRecording]=useState(false);const[recFmt,setRecFmt]=useState("webm");const[recDur,setRecDur]=useState(5);const[recProgress,setRecProgress]=useState(0);const[recRes,setRecRes]=useState("1920x1080");
+  const[animate,setAnimate]=useState(true);const[showPanel,setShowPanel]=useState(true);const[err,setErr]=useState(null);const[recording,setRecording]=useState(false);const[recFmt,setRecFmt]=useState("webm");const[recDur,setRecDur]=useState(5);const[recProgress,setRecProgress]=useState(0);const[recRes,setRecRes]=useState("1920x1080");const[recFps,setRecFps]=useState(60);
   const[palette,setPalette]=useState("Original");
   const[customColors,setCustomColors]=useState(["#000000","#00ff41"]);
   const[ditherAlgo,setDitherAlgo]=useState("None");
@@ -707,7 +707,7 @@ export default function UESCProcessor(){
     setRecording(true);setRecProgress(0);
     chunksRef.current=[];
 
-    const fps=60;
+    const fps=recFps;
     const frameDuration=1000/fps;
     const videoStream=outCanvas.captureStream(fps);
 
@@ -892,7 +892,7 @@ export default function UESCProcessor(){
         </div>
         <div style={{padding:"6px 12px",borderTop:"1px solid #1a1a1a",display:"flex",flexDirection:"column",gap:4}}>
           {recording&&<div style={{width:"100%",height:3,background:"#222",borderRadius:2,overflow:"hidden"}}><div style={{width:`${recProgress}%`,height:"100%",background:"#ff4040",transition:"width 0.1s"}}/></div>}
-          {recording&&<div style={{fontSize:8,color:"#888",textAlign:"center"}}>{recProgress}% — Rendering {recDur}s @ 60fps (real-time)</div>}
+          {recording&&<div style={{fontSize:8,color:"#888",textAlign:"center"}}>{recProgress}% — Rendering {recDur}s @ {recFps}fps</div>}
           {!recording&&<>
             <Rng label="Duration" value={recDur} min={1} max={30} step={0.5} suffix="s" onChange={v=>setRecDur(v)}/>
             <div style={{display:"flex",gap:4,alignItems:"center",marginBottom:2}}>
@@ -909,6 +909,10 @@ export default function UESCProcessor(){
               <span style={{fontSize:9,opacity:0.4,letterSpacing:"0.05em"}}>MAX</span>
               {["3840x2160","1920x1080","1280x720","800x600"].map(r=>(
                 <button key={r} onClick={()=>setRecRes(r)} style={{padding:"2px 5px",fontSize:8,fontFamily:"inherit",background:recRes===r?"#ccc":"transparent",color:recRes===r?"#0a0a0a":"#666",border:`1px solid ${recRes===r?"#ccc":"#333"}`,borderRadius:2,cursor:"pointer"}}>{r.split("x")[1]}p</button>
+              ))}
+              <span style={{fontSize:9,opacity:0.4,marginLeft:4}}>FPS</span>
+              {[30,60].map(f=>(
+                <button key={f} onClick={()=>setRecFps(f)} style={{padding:"2px 5px",fontSize:8,fontFamily:"inherit",background:recFps===f?"#ccc":"transparent",color:recFps===f?"#0a0a0a":"#666",border:`1px solid ${recFps===f?"#ccc":"#333"}`,borderRadius:2,cursor:"pointer"}}>{f}</button>
               ))}
             </div>
           </>}
