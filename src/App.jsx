@@ -31,11 +31,11 @@ const DITHER_ALGOS = {
   "FM":{g:"Modulation"},"AM":{g:"Modulation"},"Wave":{g:"Modulation"},"Contour":{g:"Modulation"},
   "Random":{g:"Noise"},"Blue Noise":{g:"Noise"},"Stipple":{g:"Noise"},"Grain":{g:"Noise"},
   "Spiral":{g:"Special"},"Concentric":{g:"Special"},"Voronoi":{g:"Special"},
-  "Plus":{g:"Shape"},"Numbers":{g:"Shape"},"Grid Matrix":{g:"Shape"},
+  "Plus":{g:"Shape"},"Numbers":{g:"Shape"},"Grid Matrix":{g:"Shape"},"Brackets":{g:"Shape"},"Edge Detect":{g:"Shape"},"Shape Dots":{g:"Shape"},"Maze":{g:"Shape"},
   "Threshold":{g:"Basic"},
 };
 
-const DP0 = {gamma:1,bias:0,invert:false,errStr:1,serpentine:false,spread:1,htAngle:0,dotGain:0,dotSize:1,lineWeight:1,frequency:1,depth:1,direction:0,rotation:0,cellSize:8,arms:5,edgeSpread:1,scale:1,brightness:0,contrast:0,colorMode:"rgb",posterize:6,solarizeT:128,duoH:"#000000",duoL:"#00ff41",sharpen:0,blur:0,dpi:1,plusSize:6,plusGap:16,plusThickness:2,numBlockW:5,numBlockH:6,numFontSize:10,numGap:20,autoPalSize:8,gmCellSize:20,gmLineWeight:0.5,gmDotSize:1.5,gmMaxBlock:8};
+const DP0 = {gamma:1,bias:0,invert:false,errStr:1,serpentine:false,spread:1,htAngle:0,dotGain:0,dotSize:1,lineWeight:1,frequency:1,depth:1,direction:0,rotation:0,cellSize:8,arms:5,edgeSpread:1,scale:1,brightness:0,contrast:0,colorMode:"rgb",posterize:6,solarizeT:128,duoH:"#000000",duoL:"#00ff41",sharpen:0,blur:0,dpi:1,plusSize:6,plusGap:16,plusThickness:2,numBlockW:5,numBlockH:6,numFontSize:10,numGap:20,autoPalSize:8,gmCellSize:20,gmLineWeight:0.5,gmDotSize:1.5,gmMaxBlock:8,brCellSize:14,edgeThreshold:30,edgeThickness:1,sdCellSize:12,sdShape:0,mazeScale:6};
 
 const MARATHON_PRESETS = {
   "Marathon Green":{palette:"Marathon Green",dither:"Bayer 4x4",dp:{...DP0,spread:0.8},gfx:{scanlines:{on:true,gap:2,opacity:0.4,speed:0},glitch:{on:true,intensity:0.15,blockSize:8,speed:0.5},rgbShift:{on:true,amount:3,angle:0},noise:{on:true,amount:0.08,speed:0.3},pixelate:{on:false,size:1},vignette:{on:true,strength:0.5},crt:{on:false,curvature:0.2},blockGlitch:{on:false,count:10,maxSize:50},chromatic:{on:false,amount:3},jitter:{on:false,amount:3},colorCycle:{on:false,speed:1},solarize:{on:false,threshold:128,speed:0.5}}},
@@ -174,6 +174,21 @@ function ditherImage(srcData,w,h,algo,palette,p,offsetX,offsetY){
   const rotRad=rotation*Math.PI/180,cosR=Math.cos(rotRad),sinR=Math.sin(rotRad);
   const ox=offsetX||0, oy=offsetY||0;
   let vCells=null;if(algo==="Voronoi")vCells=voronoiCells(w,h,cellSize*dpiS);
+
+  // Precompute Sobel gradients for Edge Detect and Brackets
+  let sobelGx=null,sobelGy=null,sobelMag=null;
+  if(algo==="Edge Detect"||algo==="Brackets"){
+    sobelGx=new Float32Array(w*h);sobelGy=new Float32Array(w*h);sobelMag=new Float32Array(w*h);
+    for(let y=1;y<h-1;y++)for(let x=1;x<w-1;x++){
+      const idx=(i2)=>{const ii=i2*4;return 0.299*data[ii]+0.587*data[ii+1]+0.114*data[ii+2];};
+      const tl=idx((y-1)*w+x-1),tc=idx((y-1)*w+x),tr=idx((y-1)*w+x+1);
+      const ml=idx(y*w+x-1),mr2=idx(y*w+x+1);
+      const bl=idx((y+1)*w+x-1),bc=idx((y+1)*w+x),brr=idx((y+1)*w+x+1);
+      const gx2=(-tl+tr-2*ml+2*mr2-bl+brr);
+      const gy2=(-tl-2*tc-tr+bl+2*bc+brr);
+      const si=y*w+x;sobelGx[si]=gx2;sobelGy[si]=gy2;sobelMag[si]=Math.sqrt(gx2*gx2+gy2*gy2);
+    }
+  }
 
   for(let y=0;y<h;y++){
     const rev=serpentine&&y%2===1;const x0=rev?w-1:0,x1=rev?-1:w,dx=rev?-1:1;
@@ -322,6 +337,138 @@ function ditherImage(srcData,w,h,algo,palette,p,offsetX,offsetY){
           if((halfD1<dotR*0.6||halfD1>(cs-dotR*0.6))&&(halfD2<dotR*0.6||halfD2>(cs-dotR*0.6))) on=true;
         }
 
+        const c=on?pal[pal.length-1]:pal[0];
+        data[i]=c[0];data[i+1]=c[1];data[i+2]=c[2];continue;
+      }
+
+      // --- Brackets: code-like characters based on edge direction ---
+      if(algo==="Brackets"){
+        const cs=Math.max(4,Math.round((p.brCellSize??14)*dpiS));
+        const si2=y*w+x;
+        const mag=sobelMag?sobelMag[si2]:0;
+        const gx2=sobelGx?sobelGx[si2]:0;
+        const gy2=sobelGy?sobelGy[si2]:0;
+        // Cell-local coordinates
+        const lx=((px%cs)+cs)%cs, ly=((py%cs)+cs)%cs;
+        const cx3=lx/cs, cy3=ly/cs; // 0-1 within cell
+
+        // Determine character shape by edge direction and brightness
+        const edgeStr=Math.min(1,mag/180);
+        const angle=Math.atan2(gy2,gx2);
+        // Quantize angle to 8 directions
+        const dir8=((Math.round(angle/(Math.PI/4))+8)%8);
+
+        let on=false;
+        if(edgeStr>0.15||br>0.1){
+          // Horizontal dash: ----
+          if(dir8===0||dir8===4){on=cy3>0.35&&cy3<0.65&&cx3>0.1&&cx3<0.9&&(Math.floor(cx3*6)%2===0);}
+          // Vertical pipe: |
+          else if(dir8===2||dir8===6){on=cx3>0.35&&cx3<0.65&&cy3>0.1&&cy3<0.9;}
+          // Diagonal /
+          else if(dir8===1||dir8===5){const d=Math.abs((1-cx3)-cy3);on=d<0.15;}
+          // Diagonal \
+          else if(dir8===3||dir8===7){const d=Math.abs(cx3-cy3);on=d<0.15;}
+          // Add brackets for high edge strength
+          if(edgeStr>0.3){
+            // Left brace {
+            if(gx2<0){const bx=cx3*2-0.3,by=cy3;const d=Math.abs(bx-0.4*Math.sin(by*Math.PI));on=on||(d<0.12&&bx>-0.1&&bx<0.8);}
+            // Right brace }
+            if(gx2>0){const bx=(1-cx3)*2-0.3,by=cy3;const d=Math.abs(bx-0.4*Math.sin(by*Math.PI));on=on||(d<0.12&&bx>-0.1&&bx<0.8);}
+          }
+          // Comma/dot for low brightness
+          if(br>0.05&&br<0.2&&!on){
+            const dx2=cx3-0.5,dy2=cy3-0.7;on=(dx2*dx2+dy2*dy2)<0.02;
+          }
+        }
+        // Suppress in very dark areas
+        if(br<0.03)on=false;
+        const c=on?pal[pal.length-1]:pal[0];
+        data[i]=c[0];data[i+1]=c[1];data[i+2]=c[2];continue;
+      }
+
+      // --- Edge Detect: Sobel edges as thin lines ---
+      if(algo==="Edge Detect"){
+        const si2=y*w+x;
+        const mag=sobelMag?sobelMag[si2]:0;
+        const thr=(p.edgeThreshold??30);
+        const thk=Math.max(0.5,(p.edgeThickness??1)*dpiS);
+        const gx2=sobelGx?sobelGx[si2]:0;
+        const gy2=sobelGy?sobelGy[si2]:0;
+        let on=false;
+        if(mag>thr){
+          // Render edge as line perpendicular to gradient
+          const angle=Math.atan2(gy2,gx2);
+          // Sub-pixel: check if we're on the ridge of the edge
+          // Simple version: just threshold
+          on=true;
+          // Add line-weight: thicken by checking neighbors
+          if(thk<=1){on=mag>thr;}
+          else{
+            // Check if any pixel within thickness radius has strong edge
+            on=mag>thr*0.7;
+          }
+        }
+        const c=on?pal[pal.length-1]:pal[0];
+        data[i]=c[0];data[i+1]=c[1];data[i+2]=c[2];continue;
+      }
+
+      // --- Shape Dots: grid of geometric shapes scaled by brightness ---
+      if(algo==="Shape Dots"){
+        const cs=Math.max(3,Math.round((p.sdCellSize??12)*dpiS));
+        const shape=p.sdShape??0; // 0=circle, 1=diamond, 2=triangle, 3=arrow, 4=mixed
+        const lx=((px%cs)+cs)%cs-cs/2;
+        const ly=((py%cs)+cs)%cs-cs/2;
+        const cellIdx=Math.floor(((px%cs)+cs*100)/cs)+Math.floor(((py%cs)+cs*100)/cs)*137;
+        const sz=br*cs*0.48; // shape radius scales with brightness
+        let sh=shape;
+        if(sh===4)sh=((Math.abs(cellIdx)*7+3)%4); // mixed: pick shape per cell
+
+        let on=false;
+        if(sz>0.5){
+          if(sh===0){on=(lx*lx+ly*ly)<sz*sz;} // circle
+          else if(sh===1){on=(Math.abs(lx)+Math.abs(ly))<sz;} // diamond
+          else if(sh===2){// triangle pointing right
+            const nx=lx/sz,ny=ly/sz;on=nx>-0.6&&nx<0.6&&Math.abs(ny)<(0.6-nx*0.5);
+          }
+          else if(sh===3){// arrow >
+            const nx=lx/sz,ny=ly/sz;
+            on=(Math.abs(ny)<0.15&&nx>-0.5&&nx<0.5)||(nx>0&&Math.abs(ny-nx)<0.15)||(nx>0&&Math.abs(ny+nx)<0.15);
+          }
+        }
+        const c=on?pal[pal.length-1]:pal[0];
+        data[i]=c[0];data[i+1]=c[1];data[i+2]=c[2];continue;
+      }
+
+      // --- Maze: connected zigzag fill pattern ---
+      if(algo==="Maze"){
+        const cs=Math.max(2,Math.round((p.mazeScale??6)*dpiS));
+        const cx2=Math.floor(((px%cs)+cs*1000)/cs);
+        const cy2=Math.floor(((py%cs)+cs*1000)/cs);
+        const lx=((px%cs)+cs)%cs;
+        const ly=((py%cs)+cs)%cs;
+        // Pseudo-random per cell: determines path direction
+        const seed=Math.abs(Math.sin(cx2*127.1+cy2*311.7)*43758.5453)%1;
+        // Two possible diagonal paths per cell: / or \
+        const diagDir=seed>0.5;
+        let on=false;
+        if(br>0.1){
+          const t2=Math.max(0.5,lineWeight*dpiS*0.5);
+          if(diagDir){
+            // Path: top-left to bottom-right (\)
+            const d=Math.abs(lx-ly);on=d<t2;
+          }else{
+            // Path: top-right to bottom-left (/)
+            const d=Math.abs(lx-(cs-1-ly));on=d<t2;
+          }
+          // For brighter areas, also fill the connectors at cell edges
+          if(br>0.4){
+            if(ly<t2||ly>=cs-t2||lx<t2||lx>=cs-t2)on=true;
+          }
+          // Very bright: fill more
+          if(br>0.7){on=true;}
+        }
+        // Very dark: suppress
+        if(br<0.05)on=false;
         const c=on?pal[pal.length-1]:pal[0];
         data[i]=c[0];data[i+1]=c[1];data[i+2]=c[2];continue;
       }
@@ -897,6 +1044,21 @@ export default function UESCProcessor(){
                   <Rng label="Line Weight" value={dp.gmLineWeight} min={0.2} max={3} step={0.1} onChange={v=>setDp(p=>({...p,gmLineWeight:v}))}/>
                   <Rng label="Dot Size" value={dp.gmDotSize} min={0.5} max={5} step={0.1} onChange={v=>setDp(p=>({...p,gmDotSize:v}))}/>
                   <Rng label="Max Block" value={dp.gmMaxBlock} min={1} max={20} step={1} onChange={v=>setDp(p=>({...p,gmMaxBlock:v}))}/>
+                </>)}
+                {ditherAlgo==="Brackets"&&(<>
+                  <Rng label="Cell Size" value={dp.brCellSize} min={4} max={30} step={1} onChange={v=>setDp(p=>({...p,brCellSize:v}))}/>
+                </>)}
+                {ditherAlgo==="Edge Detect"&&(<>
+                  <Rng label="Threshold" value={dp.edgeThreshold} min={5} max={150} step={1} onChange={v=>setDp(p=>({...p,edgeThreshold:v}))}/>
+                  <Rng label="Thickness" value={dp.edgeThickness} min={0.5} max={5} step={0.1} onChange={v=>setDp(p=>({...p,edgeThickness:v}))}/>
+                </>)}
+                {ditherAlgo==="Shape Dots"&&(<>
+                  <Rng label="Cell Size" value={dp.sdCellSize} min={3} max={30} step={1} onChange={v=>setDp(p=>({...p,sdCellSize:v}))}/>
+                  <Sel label="Shape" value={String(dp.sdShape??0)} onChange={v=>setDp(p=>({...p,sdShape:+v}))} opts={[{v:"0",l:"Circle"},{v:"1",l:"Diamond"},{v:"2",l:"Triangle"},{v:"3",l:"Arrow"},{v:"4",l:"Mixed"}]}/>
+                </>)}
+                {ditherAlgo==="Maze"&&(<>
+                  <Rng label="Cell Size" value={dp.mazeScale} min={2} max={20} step={1} onChange={v=>setDp(p=>({...p,mazeScale:v}))}/>
+                  <Rng label="Line Weight" value={dp.lineWeight} min={0.3} max={3} step={0.1} onChange={v=>setDp(p=>({...p,lineWeight:v}))}/>
                 </>)}
               </>)}
             </>)}
