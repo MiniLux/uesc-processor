@@ -477,6 +477,7 @@ export default function UESCProcessor(){
   const srcRef=useRef(null);const ditherRef=useRef(null);const dispRef=useRef(null);const asciiRef=useRef(null);
   const fileRef=useRef(null);const animRef=useRef(null);const vidRef=useRef(null);const t0Ref=useRef(0);
   const recorderRef=useRef(null);const chunksRef=useRef([]);
+  const[audioFile,setAudioFile]=useState(null);const[audioName,setAudioName]=useState("");const audioDataRef=useRef(null);const audioFileRef=useRef(null);
 
   const pRef=useRef({palette,customColors,ditherAlgo,dp,asciiMode,asciiCols,asciiInvert,gfx,cam3d});
   pRef.current={palette,customColors,ditherAlgo,dp,asciiMode,asciiCols,asciiInvert,gfx,cam3d};
@@ -522,6 +523,17 @@ export default function UESCProcessor(){
   },[]);
   const onDrop=useCallback((e)=>{e.preventDefault();loadFile(e);},[loadFile]);
   const onDragOver=useCallback((e)=>e.preventDefault(),[]);
+
+  // Audio loading
+  const loadAudio=useCallback((e)=>{
+    const file=e.target?.files?.[0];if(!file)return;
+    setAudioName(file.name);setAudioFile(file);
+    const reader=new FileReader();
+    reader.onload=(ev)=>{audioDataRef.current=ev.target.result;};
+    reader.readAsArrayBuffer(file);
+    if(e.target?.value!==undefined)e.target.value="";
+  },[]);
+  const removeAudio=useCallback(()=>{setAudioFile(null);setAudioName("");audioDataRef.current=null;},[]);
 
   const getPal=useCallback((palName,cc)=>{if(palName==="Original")return null;if(palName==="Custom")return cc.map(c=>{if(c.startsWith("#")&&c.length>=7)return[parseInt(c.slice(1,3),16),parseInt(c.slice(3,5),16),parseInt(c.slice(5,7),16)];return[0,0,0];});return PALETTES[palName];},[]);
 
@@ -650,7 +662,7 @@ export default function UESCProcessor(){
 
   const doExportPng=()=>{const c=asciiMode!=="off"?asciiRef.current:dispRef.current;if(!c||!c.width)return;const link=document.createElement("a");link.download=`UESC_${Date.now()}.png`;link.href=c.toDataURL("image/png");document.body.appendChild(link);link.click();document.body.removeChild(link);};
   // --- OFFLINE FRAME-BY-FRAME RENDER (dedicated offscreen canvases) ---
-  const startRec=()=>{
+  const startRec=async()=>{
     const sourceEl=imageEl;if(!sourceEl)return;
 
     // Parse max resolution and fit to source aspect ratio
@@ -659,14 +671,12 @@ export default function UESCProcessor(){
     const srcW=sourceEl.videoWidth||sourceEl.naturalWidth||sourceEl.width;
     const srcH=sourceEl.videoHeight||sourceEl.naturalHeight||sourceEl.height;
     const srcAspect=srcW/srcH;
-    // For 3D, use viewport aspect
     const vpEl=viewportRef.current;
     const aspect=threeRef.current?(vpEl?vpEl.clientWidth/vpEl.clientHeight:4/3):srcAspect;
-    // Fit within maxW x maxH keeping aspect ratio, round to even (codec requirement)
     let rw,rh;
     if(aspect>=maxW/maxH){rw=maxW;rh=Math.round(maxW/aspect);}
     else{rh=maxH;rw=Math.round(maxH*aspect);}
-    rw=rw-(rw%2);rh=rh-(rh%2); // ensure even dimensions
+    rw=rw-(rw%2);rh=rh-(rh%2);
 
     // Determine format
     const fmt=recFmt;let mime,ext;
@@ -678,28 +688,46 @@ export default function UESCProcessor(){
       mime=MediaRecorder.isTypeSupported("video/webm;codecs=vp9")?"video/webm;codecs=vp9":"video/webm";ext="webm";
     }
 
-    // Create dedicated offscreen canvases at export resolution
+    // Offscreen canvases
     const ctxOpts={willReadFrequently:true};
     const exSrc=document.createElement("canvas");exSrc.width=rw;exSrc.height=rh;exSrc.getContext("2d",ctxOpts);
     const exDith=document.createElement("canvas");exDith.width=rw;exDith.height=rh;exDith.getContext("2d",ctxOpts);
     const exDisp=document.createElement("canvas");exDisp.width=rw;exDisp.height=rh;exDisp.getContext("2d",ctxOpts);
     const exAscii=document.createElement("canvas");exAscii.width=rw;exAscii.height=rh;exAscii.getContext("2d",ctxOpts);
-
-    // The final output canvas - opaque to prevent alpha color shifts in encoding
     const outCanvas=document.createElement("canvas");outCanvas.width=rw;outCanvas.height=rh;
     const outCtx=outCanvas.getContext("2d",{alpha:false,willReadFrequently:true});
 
     setRecording(true);setRecProgress(0);
     chunksRef.current=[];
 
-    // Use captureStream at target fps - MediaRecorder uses wall-clock timestamps,
-    // so we MUST pace frames at real-time intervals for correct playback speed
     const fps=60;
-    const frameDuration=1000/fps; // ~16.67ms
-    const stream=outCanvas.captureStream(fps);
-    const mr=new MediaRecorder(stream,{mimeType:mime,videoBitsPerSecond:16e6});
+    const frameDuration=1000/fps;
+    const videoStream=outCanvas.captureStream(fps);
+
+    // --- Audio mixing ---
+    let audioCtx=null,audioSource=null,audioDest=null;
+    if(audioDataRef.current){
+      try{
+        audioCtx=new(window.AudioContext||window.webkitAudioContext)();
+        const audioBuf=await audioCtx.decodeAudioData(audioDataRef.current.slice(0));
+        audioDest=audioCtx.createMediaStreamDestination();
+        audioSource=audioCtx.createBufferSource();
+        audioSource.buffer=audioBuf;
+        audioSource.loop=audioBuf.duration<recDur; // loop if audio shorter than video
+        audioSource.connect(audioDest);
+      }catch(e){setErr("Audio decode failed: "+e.message);audioCtx=null;}
+    }
+
+    // Combine video + audio tracks
+    const combinedStream=new MediaStream();
+    for(const t of videoStream.getVideoTracks())combinedStream.addTrack(t);
+    if(audioDest)for(const t of audioDest.stream.getAudioTracks())combinedStream.addTrack(t);
+
+    const mr=new MediaRecorder(combinedStream,{mimeType:mime,videoBitsPerSecond:16e6});
     mr.ondataavailable=(e)=>{if(e.data.size>0)chunksRef.current.push(e.data);};
     mr.onstop=()=>{
+      if(audioSource)try{audioSource.stop();}catch(e){}
+      if(audioCtx)audioCtx.close();
       const blob=new Blob(chunksRef.current,{type:mime});
       const url=URL.createObjectURL(blob);
       const a=document.createElement("a");a.href=url;a.download=`UESC_${rw}x${rh}_${Date.now()}.${ext}`;
@@ -708,6 +736,7 @@ export default function UESCProcessor(){
     };
     mr.start();
     recorderRef.current=mr;
+    if(audioSource)audioSource.start(0);
 
     const totalFrames=Math.round(recDur*fps);
     let frame=0;
@@ -721,20 +750,13 @@ export default function UESCProcessor(){
       }
       const t=frame/fps;
       renderFrame(sourceEl,t,expOverride);
-
       const chars=CHARSETS[pRef.current.asciiMode];
       const resultCanvas=(chars)?exAscii:exDisp;
       outCtx.drawImage(resultCanvas,0,0,rw,rh);
-
       frame++;
       setRecProgress(Math.round(frame/totalFrames*100));
-
-      // Pace frames to real-time: wait until the wall-clock time matches
-      // the expected time for this frame. This ensures MediaRecorder
-      // encodes at the correct playback speed.
       const expectedTime=recStartTime+frame*frameDuration;
-      const now=performance.now();
-      const delay=Math.max(0,expectedTime-now);
+      const delay=Math.max(0,expectedTime-performance.now());
       setTimeout(renderNext,delay);
     };
     setTimeout(renderNext,100);
@@ -866,6 +888,16 @@ export default function UESCProcessor(){
           {recording&&<div style={{fontSize:8,color:"#888",textAlign:"center"}}>{recProgress}% — Rendering {recDur}s @ 60fps (real-time)</div>}
           {!recording&&<>
             <Rng label="Duration" value={recDur} min={1} max={30} step={0.5} suffix="s" onChange={v=>setRecDur(v)}/>
+            <div style={{display:"flex",gap:4,alignItems:"center",marginBottom:2}}>
+              <input ref={audioFileRef} type="file" accept="audio/*" onChange={loadAudio} style={{display:"none"}}/>
+              <span style={{fontSize:9,opacity:0.4,letterSpacing:"0.05em"}}>{"\u266B"}</span>
+              {audioName?(<>
+                <span style={{fontSize:8,color:"#aaa",flex:1,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{audioName}</span>
+                <button onClick={removeAudio} style={{padding:"1px 5px",fontSize:8,fontFamily:"inherit",background:"transparent",color:"#666",border:"1px solid #333",borderRadius:2,cursor:"pointer"}}>x</button>
+              </>):(
+                <button onClick={()=>audioFileRef.current?.click()} style={{flex:1,padding:"3px 0",fontSize:8,fontFamily:"inherit",background:"#111",color:"#666",border:"1px dashed #333",borderRadius:2,cursor:"pointer",letterSpacing:1}}>ADD AUDIO</button>
+              )}
+            </div>
             <div style={{display:"flex",gap:4,alignItems:"center",marginBottom:2}}>
               <span style={{fontSize:9,opacity:0.4,letterSpacing:"0.05em"}}>MAX</span>
               {["3840x2160","1920x1080","1280x720","800x600"].map(r=>(
