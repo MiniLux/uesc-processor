@@ -87,35 +87,46 @@ function preProcess(data,w,h,blur,sharpen){
 
 function ditherImage(srcData,w,h,algo,palette,p,offsetX,offsetY){
   const raw=preProcess(srcData,w,h,p.blur||0,p.sharpen||0);
-  const data=new Uint8ClampedArray(raw);if(algo==="None")return data;
-  const pal=palette||[[0,0,0],[255,255,255]];
+  const data=new Uint8ClampedArray(raw);
   const{gamma=1,bias=0,invert=false,errStr=1,serpentine=false,spread=1,htAngle=0,dotGain=0,dotSize=1,lineWeight=1,frequency=1,depth=1,direction=0,rotation=0,cellSize=8,arms=5,edgeSpread=1,brightness=0,contrast=0,colorMode="rgb",posterize=6,solarizeT=128,duoH="#000000",duoL="#00ff41",dpi=1}=p;
+  const contF=((contrast+100)/100)**2;
+  const duoHR=parseInt((duoH||"#000000").slice(1,3),16),duoHG=parseInt((duoH||"#000000").slice(3,5),16),duoHB=parseInt((duoH||"#000000").slice(5,7),16);
+  const duoLR=parseInt((duoL||"#00ff41").slice(1,3),16),duoLG=parseInt((duoL||"#00ff41").slice(3,5),16),duoLB=parseInt((duoL||"#00ff41").slice(5,7),16);
+
+  // Helper: apply tonal adjustments to r,g,b
+  const adjust=(r,g,b)=>{
+    r=255*Math.pow(r/255,1/gamma)+bias;g=255*Math.pow(g/255,1/gamma)+bias;b=255*Math.pow(b/255,1/gamma)+bias;
+    r=(r+brightness-128)*contF+128;g=(g+brightness-128)*contF+128;b=(b+brightness-128)*contF+128;
+    if(invert){r=255-r;g=255-g;b=255-b;}
+    if(colorMode==="grayscale"){const l=r*0.299+g*0.587+b*0.114;r=g=b=l;}
+    else if(colorMode==="sepia"){const l=r*0.299+g*0.587+b*0.114;r=l+40;g=l+20;b=l-20;}
+    else if(colorMode==="posterize"){const lv=Math.max(2,posterize);r=Math.round(r/255*(lv-1))/(lv-1)*255;g=Math.round(g/255*(lv-1))/(lv-1)*255;b=Math.round(b/255*(lv-1))/(lv-1)*255;}
+    else if(colorMode==="solarize"){if(r>solarizeT)r=255-r;if(g>solarizeT)g=255-g;if(b>solarizeT)b=255-b;}
+    else if(colorMode==="duotone"){const l=(r*0.299+g*0.587+b*0.114)/255;r=duoHR+(duoLR-duoHR)*l;g=duoHG+(duoLG-duoHG)*l;b=duoHB+(duoLB-duoHB)*l;}
+    return[Math.max(0,Math.min(255,r)),Math.max(0,Math.min(255,g)),Math.max(0,Math.min(255,b))];
+  };
+
+  // No palette ("Original"): apply adjustments only, keep original colors
+  if(!palette){
+    for(let i=0;i<data.length;i+=4){const[r,g,b]=adjust(data[i],data[i+1],data[i+2]);data[i]=r;data[i+1]=g;data[i+2]=b;}
+    return data;
+  }
+  if(algo==="None")return data;
+
+  const pal=palette;
   const errs=new Float32Array(w*h*3);
   const dpiS=Math.max(0.25,dpi);
   const rotRad=rotation*Math.PI/180,cosR=Math.cos(rotRad),sinR=Math.sin(rotRad);
-  const contF=((contrast+100)/100)**2;
   const ox=offsetX||0, oy=offsetY||0;
-  const duoHR=parseInt((duoH||"#000000").slice(1,3),16),duoHG=parseInt((duoH||"#000000").slice(3,5),16),duoHB=parseInt((duoH||"#000000").slice(5,7),16);
-  const duoLR=parseInt((duoL||"#00ff41").slice(1,3),16),duoLG=parseInt((duoL||"#00ff41").slice(3,5),16),duoLB=parseInt((duoL||"#00ff41").slice(5,7),16);
   let vCells=null;if(algo==="Voronoi")vCells=voronoiCells(w,h,cellSize*dpiS);
 
   for(let y=0;y<h;y++){
     const rev=serpentine&&y%2===1;const x0=rev?w-1:0,x1=rev?-1:w,dx=rev?-1:1;
     for(let x=x0;x!==x1;x+=dx){
       const i=(y*w+x)*4,ei=(y*w+x)*3;
-      const px=x+ox, py=y+oy; // pattern-shifted coords
-      let r=255*Math.pow(data[i]/255,1/gamma)+errs[ei]+bias;
-      let g=255*Math.pow(data[i+1]/255,1/gamma)+errs[ei+1]+bias;
-      let b=255*Math.pow(data[i+2]/255,1/gamma)+errs[ei+2]+bias;
-      r=(r+brightness-128)*contF+128;g=(g+brightness-128)*contF+128;b=(b+brightness-128)*contF+128;
-      if(invert){r=255-r;g=255-g;b=255-b;}
-      // Color modes
-      if(colorMode==="grayscale"){const l=r*0.299+g*0.587+b*0.114;r=g=b=l;}
-      else if(colorMode==="sepia"){const l=r*0.299+g*0.587+b*0.114;r=l+40;g=l+20;b=l-20;}
-      else if(colorMode==="posterize"){const lv=Math.max(2,posterize);r=Math.round(r/255*(lv-1))/(lv-1)*255;g=Math.round(g/255*(lv-1))/(lv-1)*255;b=Math.round(b/255*(lv-1))/(lv-1)*255;}
-      else if(colorMode==="solarize"){if(r>solarizeT)r=255-r;if(g>solarizeT)g=255-g;if(b>solarizeT)b=255-b;}
-      else if(colorMode==="duotone"){const l=(r*0.299+g*0.587+b*0.114)/255;r=duoHR+(duoLR-duoHR)*l;g=duoHG+(duoLG-duoHG)*l;b=duoHB+(duoLB-duoHB)*l;}
-      r=Math.max(0,Math.min(255,r));g=Math.max(0,Math.min(255,g));b=Math.max(0,Math.min(255,b));
+      const px=x+ox, py=y+oy;
+      const[ar,ag,ab]=adjust(data[i]+errs[ei],data[i+1]+errs[ei+1],data[i+2]+errs[ei+2]);
+      let r=ar,g=ag,b=ab;
       const br=(r*0.299+g*0.587+b*0.114)/255;
 
       if(algo.startsWith("Bayer")){const sz=algo==="Bayer 2x2"?2:algo==="Bayer 4x4"?4:8;const mt=sz===2?B2:sz===4?B4:B8;const th=((mt[((py%sz)+sz)%sz][((px%sz)+sz)%sz]+0.5)/(sz*sz)-0.5)*255*spread;const c=closestColor(r+th,g+th,b+th,pal);data[i]=c[0];data[i+1]=c[1];data[i+2]=c[2];continue;}
@@ -515,8 +526,18 @@ export default function UESCProcessor(){
       else if(dir===2){ditherOX=time*sx*amt;ditherOY=time*sx*amt;}
       else{ditherOX=Math.sin(time*sx)*amt;ditherOY=Math.cos(time*sx)*amt;}
     }
-    if(P.ditherAlgo!=="None"){const activePal=pal||[[0,0,0],[255,255,255]];const id=src.getContext("2d").getImageData(0,0,w,h);const dd=ditherImage(id.data,w,h,P.ditherAlgo,activePal,P.dp,ditherOX,ditherOY);dith.width=w;dith.height=h;dith.getContext("2d").putImageData(new ImageData(new Uint8ClampedArray(dd),w,h),0,0);}
-    else if(pal){const id=src.getContext("2d").getImageData(0,0,w,h);const pp=preProcess(id.data,w,h,P.dp.blur||0,P.dp.sharpen||0);for(let i=0;i<pp.length;i+=4){const c=closestColor(pp[i],pp[i+1],pp[i+2],pal);pp[i]=c[0];pp[i+1]=c[1];pp[i+2]=c[2];}dith.width=w;dith.height=h;dith.getContext("2d").putImageData(new ImageData(new Uint8ClampedArray(pp),w,h),0,0);}
+    if(P.ditherAlgo!=="None"||pal){
+      const id=src.getContext("2d").getImageData(0,0,w,h);
+      if(P.ditherAlgo!=="None"){
+        const dd=ditherImage(id.data,w,h,P.ditherAlgo,pal,P.dp,ditherOX,ditherOY);
+        dith.width=w;dith.height=h;dith.getContext("2d").putImageData(new ImageData(new Uint8ClampedArray(dd),w,h),0,0);
+      } else {
+        // Algo=None but palette set: just quantize to palette
+        const pp=preProcess(id.data,w,h,P.dp.blur||0,P.dp.sharpen||0);
+        for(let i=0;i<pp.length;i+=4){const c=closestColor(pp[i],pp[i+1],pp[i+2],pal);pp[i]=c[0];pp[i+1]=c[1];pp[i+2]=c[2];}
+        dith.width=w;dith.height=h;dith.getContext("2d").putImageData(new ImageData(new Uint8ClampedArray(pp),w,h),0,0);
+      }
+    }
     else{dith.width=w;dith.height=h;dith.getContext("2d").drawImage(src,0,0);}
 
     // --- Pipeline animations: Color Cycle (palette rotation) & Solarize (sweep) ---
