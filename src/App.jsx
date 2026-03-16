@@ -46,7 +46,7 @@ const MARATHON_PRESETS = {
   "Leela Neon":{palette:"Leela Pink",dither:"Halftone",dp:{...DP0,gamma:1.1,htAngle:45,dotGain:10,dotSize:1.2,brightness:5,contrast:5},gfx:{scanlines:{on:true,gap:2,opacity:0.3,speed:0.1},glitch:{on:true,intensity:0.2,blockSize:8,speed:0.6},rgbShift:{on:true,amount:4,angle:60},noise:{on:true,amount:0.08,speed:0.4},pixelate:{on:false,size:1},vignette:{on:true,strength:0.5},crt:{on:false,curvature:0.15},blockGlitch:{on:false,count:8,maxSize:40},chromatic:{on:true,amount:4},jitter:{on:false,amount:2},colorCycle:{on:false,speed:1},solarize:{on:false,threshold:128,speed:0.5}}},
 };
 
-const GFX0 = {scanlines:{on:false,gap:2,opacity:0.3,speed:0},glitch:{on:false,intensity:0.15,blockSize:8,speed:0.5},rgbShift:{on:false,amount:3,angle:0,speed:0.5},noise:{on:false,amount:0.06,speed:0.3},pixelate:{on:false,size:2},vignette:{on:false,strength:0.4},crt:{on:false,curvature:0.2},blockGlitch:{on:false,count:10,maxSize:50,speed:0.5},chromatic:{on:false,amount:3,speed:0.5},jitter:{on:false,amount:3,speed:1},colorCycle:{on:false,speed:1},solarize:{on:false,threshold:128,speed:0.5},offset:{on:false,speedX:0.5,speedY:0,amount:50,direction:0}};
+const GFX0 = {scanlines:{on:false,gap:2,opacity:0.3,speed:0},glitch:{on:false,intensity:0.15,blockSize:8,speed:0.5},rgbShift:{on:false,amount:3,angle:0,speed:0.5},noise:{on:false,amount:0.06,speed:0.3},pixelate:{on:false,size:2},vignette:{on:false,strength:0.4},crt:{on:false,curvature:0.2},blockGlitch:{on:false,count:10,maxSize:50,speed:0.5},chromatic:{on:false,amount:3,speed:0.5},jitter:{on:false,amount:3,speed:1},colorCycle:{on:false,speed:1},solarize:{on:false,threshold:128,speed:0.5},offset:{on:false,speedX:0.5,speedY:0,amount:50,direction:0},multicolor:{on:false,patchSize:20,speed:0.5}};
 const GLITCH_PRESETS = {
   off:{name:"OFF",...GFX0},
   marathon:{name:"MARATHON",...GFX0,scanlines:{on:true,gap:2,opacity:0.35,speed:0},glitch:{on:true,intensity:0.12,blockSize:8,speed:0.4},rgbShift:{on:true,amount:3,angle:0},noise:{on:true,amount:0.06,speed:0.3},vignette:{on:true,strength:0.45}},
@@ -523,7 +523,7 @@ function ditherImage(srcData,w,h,algo,palette,p,offsetX,offsetY){
 }
 
 // --- GLITCH ENGINE ---
-function applyGlitch(ctx,canvas,src,fx,t){
+function applyGlitch(ctx,canvas,src,fx,t,pal){
   const w=canvas.width,h=canvas.height;ctx.drawImage(src,0,0,w,h);
   if(fx.crt?.on&&fx.crt.curvature>0){const k=fx.crt.curvature*0.5,id=ctx.getImageData(0,0,w,h),od=ctx.createImageData(w,h),cx=w/2,cy=h/2;for(let y=0;y<h;y++)for(let x=0;x<w;x++){const nx2=(x-cx)/cx,ny2=(y-cy)/cy,r2=nx2*nx2+ny2*ny2,d2=1+r2*k,sx=Math.round(nx2*d2*cx+cx),sy=Math.round(ny2*d2*cy+cy),di=(y*w+x)*4;if(sx>=0&&sx<w&&sy>=0&&sy<h){const si=(sy*w+sx)*4;od.data[di]=id.data[si];od.data[di+1]=id.data[si+1];od.data[di+2]=id.data[si+2];od.data[di+3]=id.data[si+3];}else od.data[di+3]=255;}ctx.putImageData(od,0,0);}
   if(fx.pixelate?.on&&(fx.pixelate.size??1)>1){const s=fx.pixelate.size,tc=document.createElement("canvas");tc.width=Math.ceil(w/s);tc.height=Math.ceil(h/s);const tx=tc.getContext("2d");tx.imageSmoothingEnabled=false;tx.drawImage(canvas,0,0,tc.width,tc.height);ctx.imageSmoothingEnabled=false;ctx.clearRect(0,0,w,h);ctx.drawImage(tc,0,0,w,h);ctx.imageSmoothingEnabled=true;}
@@ -536,6 +536,39 @@ function applyGlitch(ctx,canvas,src,fx,t){
   // Solarize — animated threshold sweep applied after dithering
   if(fx.scanlines?.on){const gap=fx.scanlines.gap??2,op=fx.scanlines.opacity??0.3,off=Math.floor(t*(fx.scanlines.speed??0)*50)%(gap+1);ctx.fillStyle=`rgba(0,0,0,${op})`;for(let y=off;y<h;y+=gap+1)ctx.fillRect(0,y,w,1);}
   if(fx.noise?.on&&(fx.noise.amount??0)>0){const id=ctx.getImageData(0,0,w,h),amt=fx.noise.amount,tt=Math.floor(t*(fx.noise.speed??0.3)*30);for(let i=0;i<id.data.length;i+=4){const n=((Math.sin((i+tt)*12.9898+78.233)*43758.5453)%1)*amt*255;id.data[i]=Math.max(0,Math.min(255,id.data[i]+n));id.data[i+1]=Math.max(0,Math.min(255,id.data[i+1]+n));id.data[i+2]=Math.max(0,Math.min(255,id.data[i+2]+n));}ctx.putImageData(id,0,0);}
+
+  // Multicolor patches: tint blocks with random palette colors
+  if(fx.multicolor?.on&&pal&&pal.length>1){
+    const ps=Math.max(4,fx.multicolor.patchSize??20);
+    const spd=fx.multicolor.speed??0.5;
+    const mt=t*spd;
+    const id=ctx.getImageData(0,0,w,h);const d=id.data;
+    const cols=Math.ceil(w/ps),rows=Math.ceil(h/ps);
+    for(let by=0;by<rows;by++){
+      for(let bx=0;bx<cols;bx++){
+        // Seeded random per block+time: pick a palette color
+        const seed=Math.abs(Math.sin((bx+1)*127.1+(by+1)*311.7+Math.floor(mt*3)*73.13)*43758.5453)%1;
+        const ci=Math.floor(seed*pal.length)%pal.length;
+        const cr=pal[ci][0],cg=pal[ci][1],cb=pal[ci][2];
+        const x0=bx*ps,y0=by*ps;
+        const x1=Math.min(x0+ps,w),y1=Math.min(y0+ps,h);
+        for(let y=y0;y<y1;y++){
+          for(let x=x0;x<x1;x++){
+            const i=(y*w+x)*4;
+            // Only tint non-black pixels (preserve dark background)
+            const lum=d[i]*0.299+d[i+1]*0.587+d[i+2]*0.114;
+            if(lum>10){
+              // Tint: blend pixel luminance with palette color
+              const l=lum/255;
+              d[i]=Math.round(cr*l);d[i+1]=Math.round(cg*l);d[i+2]=Math.round(cb*l);
+            }
+          }
+        }
+      }
+    }
+    ctx.putImageData(id,0,0);
+  }
+
   if(fx.vignette?.on&&(fx.vignette.strength??0)>0){const gr=ctx.createRadialGradient(w/2,h/2,w*0.2,w/2,h/2,w*0.75);gr.addColorStop(0,"rgba(0,0,0,0)");gr.addColorStop(1,`rgba(0,0,0,${fx.vignette.strength})`);ctx.fillStyle=gr;ctx.fillRect(0,0,w,h);}
 }
 
@@ -888,12 +921,17 @@ export default function UESCProcessor(){
     }
 
     const chars=CHARSETS[P.asciiMode];
-    if(chars&&ascii){let cs=chars;if(P.asciiInvert)cs=cs.split("").reverse().join("");renderAscii(dith,ascii,cs,P.asciiCols);const hasG=Object.values(P.gfx).some(v=>typeof v==="object"&&v?.on);if(hasG){const tc=document.createElement("canvas");tc.width=ascii.width;tc.height=ascii.height;tc.getContext("2d").drawImage(ascii,0,0);applyGlitch(ascii.getContext("2d"),ascii,tc,P.gfx,time);}if(!exportOverride){disp.style.display="none";ascii.style.display="block";}}
-    else{if(!exportOverride){if(ascii)ascii.style.display="none";disp.style.display="block";}disp.width=w;disp.height=h;const hasG=Object.values(P.gfx).some(v=>typeof v==="object"&&v?.on);if(hasG)applyGlitch(disp.getContext("2d"),disp,dith,P.gfx,time);else disp.getContext("2d").drawImage(dith,0,0);}
+    if(chars&&ascii){let cs=chars;if(P.asciiInvert)cs=cs.split("").reverse().join("");renderAscii(dith,ascii,cs,P.asciiCols);const hasG=Object.values(P.gfx).some(v=>typeof v==="object"&&v?.on);if(hasG){const tc=document.createElement("canvas");tc.width=ascii.width;tc.height=ascii.height;tc.getContext("2d").drawImage(ascii,0,0);applyGlitch(ascii.getContext("2d"),ascii,tc,P.gfx,time,pal);}if(!exportOverride){disp.style.display="none";ascii.style.display="block";}}
+    else{if(!exportOverride){if(ascii)ascii.style.display="none";disp.style.display="block";}disp.width=w;disp.height=h;const hasG=Object.values(P.gfx).some(v=>typeof v==="object"&&v?.on);if(hasG)applyGlitch(disp.getContext("2d"),disp,dith,P.gfx,time,pal);else disp.getContext("2d").drawImage(dith,0,0);}
   },[getPal]);
 
   useEffect(()=>{if(!imageEl||videoPlaying||recording)return;t0Ref.current=performance.now();let r=true;const loop=()=>{if(!r)return;renderFrame(imageEl,animate?(performance.now()-t0Ref.current)/1000:0);animRef.current=requestAnimationFrame(loop);};loop();return()=>{r=false;cancelAnimationFrame(animRef.current);};},[imageEl,animate,renderFrame,videoPlaying,recording,palette,customColors,ditherAlgo,dp,asciiMode,asciiCols,asciiInvert,gfx,cam3d]);
-  useEffect(()=>{if(!videoEl||!videoPlaying)return;videoEl.play().catch(()=>{});t0Ref.current=performance.now();let r=true;const loop=()=>{if(!r)return;if(videoEl.paused||videoEl.ended){setVideoPlaying(false);return;}renderFrame(videoEl,(performance.now()-t0Ref.current)/1000);vidRef.current=requestAnimationFrame(loop);};loop();return()=>{r=false;cancelAnimationFrame(vidRef.current);videoEl.pause();};},[videoEl,videoPlaying,renderFrame]);
+  useEffect(()=>{if(!videoEl||!videoPlaying)return;videoEl.play().catch(()=>{});t0Ref.current=performance.now();let r=true;const loop=()=>{if(!r)return;if(videoEl.paused||videoEl.ended){
+    // Capture current frame before stopping
+    const tc=document.createElement("canvas");tc.width=videoEl.videoWidth;tc.height=videoEl.videoHeight;
+    tc.getContext("2d").drawImage(videoEl,0,0);
+    const fi=new Image();fi.onload=()=>setImageEl(fi);fi.src=tc.toDataURL();
+    setVideoPlaying(false);return;}renderFrame(videoEl,(performance.now()-t0Ref.current)/1000);vidRef.current=requestAnimationFrame(loop);};loop();return()=>{r=false;cancelAnimationFrame(vidRef.current);videoEl.pause();};},[videoEl,videoPlaying,renderFrame]);
 
   const loadGlitchPreset=(k)=>{setGlitchPreset(k);const p=GLITCH_PRESETS[k];const g={...GFX0};for(const key of Object.keys(p)){if(key!=="name"&&typeof p[key]==="object")g[key]={...GFX0[key],...p[key]};}setGfx(g);};
   const setFx=(grp,key,val)=>setGfx(prev=>({...prev,[grp]:{...prev[grp],[key]:val}}));
@@ -1029,7 +1067,17 @@ export default function UESCProcessor(){
           <input ref={fileRef} type="file" accept="image/*,.svg,video/*,.obj,.stl,.glb,.gltf" onChange={loadFile} style={{display:"none"}}/>
           <button onClick={()=>fileRef.current?.click()} style={{width:"100%",padding:"7px 0",fontSize:9,fontFamily:"inherit",letterSpacing:2,textTransform:"uppercase",background:"#111",color:"#aaa",border:"1px dashed #333",borderRadius:2,cursor:"pointer"}}>{imageEl?"\u21BB REPLACE":"\u2295 IMPORT"}</button>
           {err&&<div style={{fontSize:8,color:"#ff4040",marginTop:3,textAlign:"center"}}>{err}</div>}
-          {mediaType==="video"&&<button onClick={()=>setVideoPlaying(p=>!p)} style={{width:"100%",padding:"5px 0",fontSize:9,fontFamily:"inherit",letterSpacing:2,textTransform:"uppercase",marginTop:4,background:videoPlaying?"#1a1a1a":"#111",color:videoPlaying?"#fff":"#aaa",border:"1px solid #333",borderRadius:2,cursor:"pointer"}}>{videoPlaying?"\u23F8 PAUSE":"\u25B6 PLAY"}</button>}
+          {mediaType==="video"&&<button onClick={()=>{
+            setVideoPlaying(p=>{
+              if(p&&videoEl){
+                // Pausing: capture current frame as imageEl
+                const tc=document.createElement("canvas");tc.width=videoEl.videoWidth;tc.height=videoEl.videoHeight;
+                tc.getContext("2d").drawImage(videoEl,0,0);
+                const fi=new Image();fi.onload=()=>setImageEl(fi);fi.src=tc.toDataURL();
+              }
+              return !p;
+            });
+          }} style={{width:"100%",padding:"5px 0",fontSize:9,fontFamily:"inherit",letterSpacing:2,textTransform:"uppercase",marginTop:4,background:videoPlaying?"#1a1a1a":"#111",color:videoPlaying?"#fff":"#aaa",border:"1px solid #333",borderRadius:2,cursor:"pointer"}}>{videoPlaying?"\u23F8 PAUSE":"\u25B6 PLAY"}</button>}
         </div>
         <div style={{flex:1,overflowY:"auto",padding:"0 12px 16px"}}>
           <Sec title="Marathon Presets" defaultOpen={false}><div style={{display:"flex",flexDirection:"column",gap:3}}>{Object.keys(MARATHON_PRESETS).map(k=>(<button key={k} onClick={()=>loadMarathonPreset(k)} style={{padding:"4px 8px",fontSize:9,fontFamily:"inherit",background:"#111",color:"#aaa",border:"1px solid #2a2a2a",borderRadius:2,cursor:"pointer",textAlign:"left",letterSpacing:1}}>{k}</button>))}</div><div style={{fontSize:8,opacity:0.25,marginTop:4}}>Palette + dither + glitch</div></Sec>
@@ -1158,6 +1206,10 @@ export default function UESCProcessor(){
             <Tog label="Pixelate" value={gfx.pixelate?.on} onChange={v=>setFx("pixelate","on",v)}/>{gfx.pixelate?.on&&<Rng label="Size" value={gfx.pixelate.size??2} min={1} max={12} onChange={v=>setFx("pixelate","size",v)}/>}
             <Tog label="Vignette" value={gfx.vignette?.on} onChange={v=>setFx("vignette","on",v)}/>{gfx.vignette?.on&&<Rng label="Strength" value={gfx.vignette.strength??0.4} min={0} max={1} step={0.05} onChange={v=>setFx("vignette","strength",v)}/>}
             <Tog label="CRT Barrel" value={gfx.crt?.on} onChange={v=>setFx("crt","on",v)}/>{gfx.crt?.on&&<Rng label="Curvature" value={gfx.crt.curvature??0.2} min={0.05} max={1} step={0.05} onChange={v=>setFx("crt","curvature",v)}/>}
+            <Tog label="Multicolor" value={gfx.multicolor?.on} onChange={v=>setFx("multicolor","on",v)}/>{gfx.multicolor?.on&&<>
+              <Rng label="Patch Size" value={gfx.multicolor?.patchSize??20} min={4} max={80} step={1} onChange={v=>setFx("multicolor","patchSize",v)}/>
+              <Rng label="Speed" value={gfx.multicolor?.speed??0.5} min={0} max={5} step={0.1} onChange={v=>setFx("multicolor","speed",v)}/>
+            </>}
             <Tog label="Offset Sweep" value={gfx.offset?.on} onChange={v=>setFx("offset","on",v)}/>{gfx.offset?.on&&<>
               <Rng label="Amount" value={gfx.offset?.amount??50} min={5} max={200} step={1} onChange={v=>setFx("offset","amount",v)}/>
               <Rng label="Speed X" value={gfx.offset?.speedX??0.5} min={0} max={5} step={0.1} onChange={v=>setFx("offset","speedX",v)}/>
