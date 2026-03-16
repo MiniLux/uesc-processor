@@ -46,7 +46,7 @@ const MARATHON_PRESETS = {
   "Leela Neon":{palette:"Leela Pink",dither:"Halftone",dp:{...DP0,gamma:1.1,htAngle:45,dotGain:10,dotSize:1.2,brightness:5,contrast:5},gfx:{scanlines:{on:true,gap:2,opacity:0.3,speed:0.1},glitch:{on:true,intensity:0.2,blockSize:8,speed:0.6},rgbShift:{on:true,amount:4,angle:60},noise:{on:true,amount:0.08,speed:0.4},pixelate:{on:false,size:1},vignette:{on:true,strength:0.5},crt:{on:false,curvature:0.15},blockGlitch:{on:false,count:8,maxSize:40},chromatic:{on:true,amount:4},jitter:{on:false,amount:2},colorCycle:{on:false,speed:1},solarize:{on:false,threshold:128,speed:0.5}}},
 };
 
-const GFX0 = {scanlines:{on:false,gap:2,opacity:0.3,speed:0},glitch:{on:false,intensity:0.15,blockSize:8,speed:0.5},rgbShift:{on:false,amount:3,angle:0,speed:0.5},noise:{on:false,amount:0.06,speed:0.3},pixelate:{on:false,size:2},vignette:{on:false,strength:0.4},crt:{on:false,curvature:0.2},blockGlitch:{on:false,count:10,maxSize:50,speed:0.5},chromatic:{on:false,amount:3,speed:0.5},jitter:{on:false,amount:3,speed:1},colorCycle:{on:false,speed:1},solarize:{on:false,threshold:128,speed:0.5},offset:{on:false,speedX:0.5,speedY:0,amount:50,direction:0},multicolor:{on:false,patchSize:20,speed:0.5,shape:0}};
+const GFX0 = {scanlines:{on:false,gap:2,opacity:0.3,speed:0},glitch:{on:false,intensity:0.15,blockSize:8,speed:0.5},rgbShift:{on:false,amount:3,angle:0,speed:0.5},noise:{on:false,amount:0.06,speed:0.3},pixelate:{on:false,size:2},vignette:{on:false,strength:0.4},crt:{on:false,curvature:0.2},blockGlitch:{on:false,count:10,maxSize:50,speed:0.5},chromatic:{on:false,amount:3,speed:0.5},jitter:{on:false,amount:3,speed:1},colorCycle:{on:false,speed:1},solarize:{on:false,threshold:128,speed:0.5},offset:{on:false,speedX:0.5,speedY:0,amount:50,direction:0},multicolor:{on:false,patchSize:20,speed:0.5,shape:0},coords:{on:false,density:50,threshold:40,fontSize:9,speed:0.3}};
 const GLITCH_PRESETS = {
   off:{name:"OFF",...GFX0},
   marathon:{name:"MARATHON",...GFX0,scanlines:{on:true,gap:2,opacity:0.35,speed:0},glitch:{on:true,intensity:0.12,blockSize:8,speed:0.4},rgbShift:{on:true,amount:3,angle:0},noise:{on:true,amount:0.06,speed:0.3},vignette:{on:true,strength:0.45}},
@@ -598,6 +598,67 @@ function applyGlitch(ctx,canvas,src,fx,t,pal,mcSvgMask){
       }
     }
     ctx.putImageData(id,0,0);
+  }
+
+  // Coordinates: edge-detected points with number labels
+  if(fx.coords?.on){
+    const density=fx.coords.density??50;
+    const thr=fx.coords.threshold??40;
+    const fSz=fx.coords.fontSize??9;
+    const spd=fx.coords.speed??0.3;
+    const ct=t*spd;
+
+    // Get luminance for Sobel
+    const id=ctx.getImageData(0,0,w,h);const d=id.data;
+    const lum=new Float32Array(w*h);
+    for(let j=0;j<w*h;j++)lum[j]=d[j*4]*0.299+d[j*4+1]*0.587+d[j*4+2]*0.114;
+
+    // Sobel + find strong edge points on a grid
+    const gridStep=Math.max(8,Math.round(200/Math.max(1,density)*10));
+    const points=[];
+    for(let gy=2;gy<h-2;gy+=gridStep){
+      for(let gx=2;gx<w-2;gx+=gridStep){
+        // Find strongest edge point in this grid cell
+        let bestMag=0,bestX=gx,bestY=gy;
+        const scanR=Math.floor(gridStep/2);
+        for(let sy=Math.max(1,gy-scanR);sy<Math.min(h-1,gy+scanR);sy+=2){
+          for(let sx=Math.max(1,gx-scanR);sx<Math.min(w-1,gx+scanR);sx+=2){
+            const idx2=sy*w+sx;
+            const gxS=(-lum[idx2-w-1]+lum[idx2-w+1]-2*lum[idx2-1]+2*lum[idx2+1]-lum[idx2+w-1]+lum[idx2+w+1]);
+            const gyS=(-lum[idx2-w-1]-2*lum[idx2-w]-lum[idx2-w+1]+lum[idx2+w-1]+2*lum[idx2+w]+lum[idx2+w+1]);
+            const mag=Math.sqrt(gxS*gxS+gyS*gyS);
+            if(mag>bestMag){bestMag=mag;bestX=sx;bestY=sy;}
+          }
+        }
+        if(bestMag>thr)points.push({x:bestX,y:bestY,mag:bestMag});
+      }
+    }
+
+    // Draw coordinate labels
+    ctx.save();
+    ctx.font=`${fSz}px 'Courier New',monospace`;
+    ctx.textBaseline="middle";
+    for(const pt of points){
+      // Generate pseudo-random coordinate number seeded by position+time
+      const seed1=Math.abs(Math.sin(pt.x*73.17+pt.y*311.7+Math.floor(ct*2)*47.1)*43758.5453);
+      const num=((seed1*100)%100).toFixed(3);
+      // Alpha based on edge strength
+      const alpha=Math.min(1,pt.mag/200);
+      // Pick color from pixel at that location
+      const pi=(pt.y*w+pt.x)*4;
+      const pr=d[pi],pg=d[pi+1],pb=d[pi+2];
+      const pixLum=pr*0.299+pg*0.587+pb*0.114;
+      // Use white if pixel is dark, else use pixel color brightened
+      if(pixLum>30){
+        ctx.fillStyle=`rgba(${Math.min(255,pr+80)},${Math.min(255,pg+80)},${Math.min(255,pb+80)},${alpha})`;
+      } else {
+        ctx.fillStyle=`rgba(200,200,200,${alpha*0.7})`;
+      }
+      ctx.fillText(num,pt.x+3,pt.y);
+      // Small dot at the point
+      ctx.fillRect(pt.x-1,pt.y-1,2,2);
+    }
+    ctx.restore();
   }
 
   if(fx.vignette?.on&&(fx.vignette.strength??0)>0){const gr=ctx.createRadialGradient(w/2,h/2,w*0.2,w/2,h/2,w*0.75);gr.addColorStop(0,"rgba(0,0,0,0)");gr.addColorStop(1,`rgba(0,0,0,${fx.vignette.strength})`);ctx.fillStyle=gr;ctx.fillRect(0,0,w,h);}
@@ -1295,6 +1356,12 @@ export default function UESCProcessor(){
               <Rng label="Speed X" value={gfx.offset?.speedX??0.5} min={0} max={5} step={0.1} onChange={v=>setFx("offset","speedX",v)}/>
               <Rng label="Speed Y" value={gfx.offset?.speedY??0} min={0} max={5} step={0.1} onChange={v=>setFx("offset","speedY",v)}/>
               <Sel label="Direction" value={String(gfx.offset?.direction??0)} onChange={v=>setFx("offset","direction",+v)} opts={[{v:"0",l:"Horizontal"},{v:"1",l:"Vertical"},{v:"2",l:"Diagonal"},{v:"3",l:"Circular"}]}/>
+            </>}
+            <Tog label="Coordinates" value={gfx.coords?.on} onChange={v=>setFx("coords","on",v)}/>{gfx.coords?.on&&<>
+              <Rng label="Density" value={gfx.coords?.density??50} min={5} max={200} step={1} onChange={v=>setFx("coords","density",v)}/>
+              <Rng label="Edge Threshold" value={gfx.coords?.threshold??40} min={5} max={150} step={1} onChange={v=>setFx("coords","threshold",v)}/>
+              <Rng label="Font Size" value={gfx.coords?.fontSize??9} min={5} max={24} step={1} onChange={v=>setFx("coords","fontSize",v)}/>
+              <Rng label="Speed" value={gfx.coords?.speed??0.3} min={0} max={3} step={0.1} onChange={v=>setFx("coords","speed",v)}/>
             </>}
           </Sec>
 
