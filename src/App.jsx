@@ -106,14 +106,15 @@ function ditherImage(srcData,w,h,algo,palette,p,offsetX,offsetY){
     return[Math.max(0,Math.min(255,r)),Math.max(0,Math.min(255,g)),Math.max(0,Math.min(255,b))];
   };
 
-  // No palette ("Original"): apply adjustments only, keep original colors
-  if(!palette){
+  // No palette ("Original") + no algo: apply adjustments only, keep original colors
+  if(!palette&&algo==="None"){
     for(let i=0;i<data.length;i+=4){const[r,g,b]=adjust(data[i],data[i+1],data[i+2]);data[i]=r;data[i+1]=g;data[i+2]=b;}
     return data;
   }
   if(algo==="None")return data;
 
-  const pal=palette;
+  // If Original palette selected with a dither algo, default to 1-bit B&W
+  const pal=palette||[[0,0,0],[255,255,255]];
   const errs=new Float32Array(w*h*3);
   const dpiS=Math.max(0.25,dpi);
   const rotRad=rotation*Math.PI/180,cosR=Math.cos(rotRad),sinR=Math.sin(rotRad);
