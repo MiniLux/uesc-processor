@@ -35,7 +35,7 @@ const DITHER_ALGOS = {
   "Threshold":{g:"Basic"},
 };
 
-const DP0 = {gamma:1,bias:0,invert:false,errStr:1,serpentine:false,spread:1,htAngle:0,dotGain:0,dotSize:1,lineWeight:1,frequency:1,depth:1,direction:0,rotation:0,cellSize:8,arms:5,edgeSpread:1,scale:1,brightness:0,contrast:0,colorMode:"rgb",posterize:6,solarizeT:128,duoH:"#000000",duoL:"#00ff41",sharpen:0,blur:0,dpi:1,plusSize:6,plusGap:16,plusThickness:2,numBlockW:5,numBlockH:6,numFontSize:10,numGap:20,autoPalSize:8,gmCellSize:20,gmLineWeight:0.5,gmDotSize:1.5,gmMaxBlock:8,brCellSize:14,edgeThreshold:30,edgeThickness:1,sdCellSize:12,sdShape:0,mazeScale:6,glyphChars:".:-=+*#@",glyphCellSize:8};
+const DP0 = {gamma:1,bias:0,invert:false,errStr:1,serpentine:false,spread:1,htAngle:0,dotGain:0,dotSize:1,lineWeight:1,frequency:1,depth:1,direction:0,rotation:0,cellSize:8,arms:5,edgeSpread:1,scale:1,brightness:0,contrast:0,colorMode:"rgb",posterize:6,solarizeT:128,duoH:"#000000",duoL:"#00ff41",sharpen:0,blur:0,dpi:1,plusSize:6,plusGap:16,plusThickness:2,numBlockW:5,numBlockH:6,numFontSize:10,numGap:20,autoPalSize:8,gmCellSize:20,gmLineWeight:0.5,gmDotSize:1.5,gmMaxBlock:8,brCellSize:14,edgeThreshold:30,edgeThickness:1,sdCellSize:12,sdShape:0,mazeScale:6,glyphChars:".:-=+*#@",glyphCellSize:8,glyphFont:"monospace"};
 
 const MARATHON_PRESETS = {
   "Marathon Green":{palette:"Marathon Green",dither:"Bayer 4x4",dp:{...DP0,spread:0.8},gfx:{scanlines:{on:true,gap:2,opacity:0.4,speed:0},glitch:{on:true,intensity:0.15,blockSize:8,speed:0.5},rgbShift:{on:true,amount:3,angle:0},noise:{on:true,amount:0.08,speed:0.3},pixelate:{on:false,size:1},vignette:{on:true,strength:0.5},crt:{on:false,curvature:0.2},blockGlitch:{on:false,count:10,maxSize:50},chromatic:{on:false,amount:3},jitter:{on:false,amount:3},colorCycle:{on:false,speed:1},solarize:{on:false,threshold:128,speed:0.5}}},
@@ -174,6 +174,7 @@ function ditherImage(srcData,w,h,algo,palette,p,offsetX,offsetY){
   const rotRad=rotation*Math.PI/180,cosR=Math.cos(rotRad),sinR=Math.sin(rotRad);
   const ox=offsetX||0, oy=offsetY||0;
   let vCells=null;if(algo==="Voronoi")vCells=voronoiCells(w,h,cellSize*dpiS);
+  let glyphCache=null; // cached rendered glyphs for Glyph Map
 
   // Precompute Sobel gradients for Edge Detect and Brackets
   let sobelGx=null,sobelGy=null,sobelMag=null;
@@ -473,123 +474,40 @@ function ditherImage(srcData,w,h,algo,palette,p,offsetX,offsetY){
         data[i]=c[0];data[i+1]=c[1];data[i+2]=c[2];continue;
       }
 
-      // --- Glyph Map: bitmap font characters mapped by brightness ---
+      // --- Glyph Map: real font characters mapped by brightness ---
       if(algo==="Glyph Map"){
         const chars=p.glyphChars||".:-=+*#@";
         if(chars.length<1){data[i]=pal[0][0];data[i+1]=pal[0][1];data[i+2]=pal[0][2];continue;}
         const cs=Math.max(3,Math.round((p.glyphCellSize??8)*dpiS));
-        // 5x7 bitmap font - each char is 5 columns × 7 rows, stored as 7 ints (each 5 bits)
-        const FONT={
-          " ":[0,0,0,0,0,0,0],
-          ".":[0,0,0,0,0,4,0],
-          ",":[0,0,0,0,4,4,8],
-          ":":[0,4,0,0,4,0,0],
-          ";":[0,4,0,0,4,4,8],
-          "-":[0,0,0,14,0,0,0],
-          "=":[0,0,14,0,14,0,0],
-          "+":[0,4,4,14,4,4,0],
-          "*":[0,10,4,14,4,10,0],
-          "#":[10,31,10,10,31,10,0],
-          "@":[14,17,23,21,23,16,14],
-          "|":[4,4,4,4,4,4,4],
-          "/":[1,1,2,4,8,16,16],
-          "\\":[16,16,8,4,2,1,1],
-          "!":[4,4,4,4,0,4,0],
-          "?":[14,17,2,4,0,4,0],
-          "~":[0,0,8,21,2,0,0],
-          "^":[4,10,0,0,0,0,0],
-          "_":[0,0,0,0,0,0,31],
-          "%":[17,2,4,4,8,17,0],
-          "&":[12,18,12,26,17,14,0],
-          "$":[4,15,20,14,5,30,4],
-          "0":[14,17,19,21,25,17,14],
-          "1":[4,12,4,4,4,4,14],
-          "2":[14,17,1,6,8,16,31],
-          "3":[14,17,1,6,1,17,14],
-          "4":[2,6,10,18,31,2,2],
-          "5":[31,16,30,1,1,17,14],
-          "6":[6,8,16,30,17,17,14],
-          "7":[31,1,2,4,8,8,8],
-          "8":[14,17,17,14,17,17,14],
-          "9":[14,17,17,15,1,2,12],
-          "A":[14,17,17,31,17,17,17],
-          "B":[30,17,17,30,17,17,30],
-          "C":[14,17,16,16,16,17,14],
-          "D":[30,17,17,17,17,17,30],
-          "E":[31,16,16,30,16,16,31],
-          "F":[31,16,16,30,16,16,16],
-          "G":[14,17,16,23,17,17,14],
-          "H":[17,17,17,31,17,17,17],
-          "I":[14,4,4,4,4,4,14],
-          "J":[7,2,2,2,2,18,12],
-          "K":[17,18,20,24,20,18,17],
-          "L":[16,16,16,16,16,16,31],
-          "M":[17,27,21,21,17,17,17],
-          "N":[17,25,21,21,21,19,17],
-          "O":[14,17,17,17,17,17,14],
-          "P":[30,17,17,30,16,16,16],
-          "Q":[14,17,17,17,21,18,13],
-          "R":[30,17,17,30,20,18,17],
-          "S":[14,17,16,14,1,17,14],
-          "T":[31,4,4,4,4,4,4],
-          "U":[17,17,17,17,17,17,14],
-          "V":[17,17,17,17,10,10,4],
-          "W":[17,17,17,21,21,27,17],
-          "X":[17,17,10,4,10,17,17],
-          "Y":[17,17,10,4,4,4,4],
-          "Z":[31,1,2,4,8,16,31],
-          "a":[0,0,14,1,15,17,15],
-          "b":[16,16,30,17,17,17,30],
-          "c":[0,0,14,16,16,17,14],
-          "d":[1,1,15,17,17,17,15],
-          "e":[0,0,14,17,31,16,14],
-          "f":[6,8,8,28,8,8,8],
-          "g":[0,0,15,17,15,1,14],
-          "h":[16,16,30,17,17,17,17],
-          "i":[4,0,12,4,4,4,14],
-          "j":[2,0,2,2,2,18,12],
-          "k":[16,16,18,20,24,20,18],
-          "l":[12,4,4,4,4,4,14],
-          "m":[0,0,26,21,21,17,17],
-          "n":[0,0,30,17,17,17,17],
-          "o":[0,0,14,17,17,17,14],
-          "p":[0,0,30,17,30,16,16],
-          "q":[0,0,15,17,15,1,1],
-          "r":[0,0,22,25,16,16,16],
-          "s":[0,0,15,16,14,1,30],
-          "t":[8,8,28,8,8,9,6],
-          "u":[0,0,17,17,17,19,13],
-          "v":[0,0,17,17,10,10,4],
-          "w":[0,0,17,17,21,21,10],
-          "x":[0,0,17,10,4,10,17],
-          "y":[0,0,17,17,15,1,14],
-          "z":[0,0,31,2,4,8,31],
-          "{":[3,4,4,8,4,4,3],
-          "}":[24,4,4,2,4,4,24],
-          "[":[14,8,8,8,8,8,14],
-          "]":[14,2,2,2,2,2,14],
-          "(":[2,4,8,8,8,4,2],
-          ")":[8,4,2,2,2,4,8],
-          "<":[0,2,4,8,4,2,0],
-          ">":[0,8,4,2,4,8,0],
-        };
+        const fontName=p.glyphFont||"monospace";
 
-        // Which character for this cell's brightness
+        // Build glyph cache on first pixel (or when params change)
+        if(!glyphCache||glyphCache._cs!==cs||glyphCache._chars!==chars||glyphCache._font!==fontName){
+          glyphCache={_cs:cs,_chars:chars,_font:fontName,bitmaps:{}};
+          const tc=document.createElement("canvas");tc.width=cs;tc.height=cs;
+          const tx=tc.getContext("2d");
+          const uniqueChars=[...new Set(chars)];
+          for(const ch of uniqueChars){
+            tx.clearRect(0,0,cs,cs);
+            tx.fillStyle="#000";tx.fillRect(0,0,cs,cs);
+            tx.fillStyle="#fff";
+            tx.font=`bold ${Math.round(cs*0.85)}px ${fontName}`;
+            tx.textAlign="center";tx.textBaseline="middle";
+            tx.fillText(ch,cs/2,cs/2+1);
+            const id2=tx.getImageData(0,0,cs,cs);
+            const bm=new Uint8Array(cs*cs);
+            for(let j=0;j<cs*cs;j++)bm[j]=id2.data[j*4]>80?1:0;
+            glyphCache.bitmaps[ch]=bm;
+          }
+        }
+
         const ci=Math.min(chars.length-1,Math.max(0,Math.round(br*(chars.length-1))));
         const ch=chars[ci];
-        // Get glyph bitmap (default to dot if not found)
-        const glyph=FONT[ch]||FONT["."]||[0,0,0,0,0,0,0];
-        // Cell-local pixel
+        const bm=glyphCache.bitmaps[ch];
         const lx=((px%cs)+cs)%cs;
         const ly=((py%cs)+cs)%cs;
-        // Map local pixel to 5x7 glyph
-        const gx=Math.floor(lx/cs*5);
-        const gy=Math.floor(ly/cs*7);
         let on=false;
-        if(gy>=0&&gy<7&&gx>=0&&gx<5){
-          on=!!((glyph[gy]>>(4-gx))&1);
-        }
-        // Suppress in total black
+        if(bm)on=!!bm[ly*cs+lx];
         if(br<0.01)on=false;
         const c=on?pal[pal.length-1]:pal[0];
         data[i]=c[0];data[i+1]=c[1];data[i+2]=c[2];continue;
@@ -1184,9 +1102,27 @@ export default function UESCProcessor(){
                 </>)}
                 {ditherAlgo==="Glyph Map"&&(<>
                   <Rng label="Cell Size" value={dp.glyphCellSize} min={3} max={24} step={1} onChange={v=>setDp(p=>({...p,glyphCellSize:v}))}/>
+                  <Sel label="Font" value={dp.glyphFont||"monospace"} onChange={v=>setDp(p=>({...p,glyphFont:v}))} opts={[
+                    {v:"monospace",l:"Monospace"},
+                    {v:"'Courier New',monospace",l:"Courier New"},
+                    {v:"'Arial',sans-serif",l:"Arial"},
+                    {v:"'Georgia',serif",l:"Georgia"},
+                    {v:"'Times New Roman',serif",l:"Times New Roman"},
+                    {v:"'Helvetica',sans-serif",l:"Helvetica"},
+                    {v:"'Verdana',sans-serif",l:"Verdana"},
+                    {v:"'Impact',sans-serif",l:"Impact"},
+                    {v:"serif",l:"Serif"},
+                    {v:"sans-serif",l:"Sans-Serif"},
+                    {v:"cursive",l:"Cursive"},
+                    {v:"fantasy",l:"Fantasy"},
+                  ]}/>
                   <div style={{marginBottom:7}}>
                     <div style={{...LBL,marginBottom:2}}>Characters (dark → bright)</div>
                     <input type="text" value={dp.glyphChars} onChange={e=>setDp(p=>({...p,glyphChars:e.target.value}))} style={{width:"100%",padding:"3px 5px",background:"#0a0a0a",border:"1px solid #2a2a2a",color:"#ccc",fontFamily:"'Courier New',monospace",fontSize:11,borderRadius:2,outline:"none"}} placeholder=".:-=+*#@"/>
+                  </div>
+                  <div style={{marginBottom:7}}>
+                    <div style={{...LBL,marginBottom:2}}>Custom Font Name</div>
+                    <input type="text" value={dp.glyphFont||""} onChange={e=>setDp(p=>({...p,glyphFont:e.target.value}))} style={{width:"100%",padding:"3px 5px",background:"#0a0a0a",border:"1px solid #2a2a2a",color:"#666",fontFamily:"'Courier New',monospace",fontSize:9,borderRadius:2,outline:"none"}} placeholder="Type any CSS font name"/>
                   </div>
                 </>)}
               </>)}
