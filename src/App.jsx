@@ -31,11 +31,11 @@ const DITHER_ALGOS = {
   "FM":{g:"Modulation"},"AM":{g:"Modulation"},"Wave":{g:"Modulation"},"Contour":{g:"Modulation"},
   "Random":{g:"Noise"},"Blue Noise":{g:"Noise"},"Stipple":{g:"Noise"},"Grain":{g:"Noise"},
   "Spiral":{g:"Special"},"Concentric":{g:"Special"},"Voronoi":{g:"Special"},
-  "Plus":{g:"Shape"},"Numbers":{g:"Shape"},
+  "Plus":{g:"Shape"},"Numbers":{g:"Shape"},"Grid Matrix":{g:"Shape"},
   "Threshold":{g:"Basic"},
 };
 
-const DP0 = {gamma:1,bias:0,invert:false,errStr:1,serpentine:false,spread:1,htAngle:0,dotGain:0,dotSize:1,lineWeight:1,frequency:1,depth:1,direction:0,rotation:0,cellSize:8,arms:5,edgeSpread:1,scale:1,brightness:0,contrast:0,colorMode:"rgb",posterize:6,solarizeT:128,duoH:"#000000",duoL:"#00ff41",sharpen:0,blur:0,dpi:1,plusSize:6,plusGap:16,plusThickness:2,numBlockW:5,numBlockH:6,numFontSize:10,numGap:20,autoPalSize:8};
+const DP0 = {gamma:1,bias:0,invert:false,errStr:1,serpentine:false,spread:1,htAngle:0,dotGain:0,dotSize:1,lineWeight:1,frequency:1,depth:1,direction:0,rotation:0,cellSize:8,arms:5,edgeSpread:1,scale:1,brightness:0,contrast:0,colorMode:"rgb",posterize:6,solarizeT:128,duoH:"#000000",duoL:"#00ff41",sharpen:0,blur:0,dpi:1,plusSize:6,plusGap:16,plusThickness:2,numBlockW:5,numBlockH:6,numFontSize:10,numGap:20,autoPalSize:8,gmCellSize:20,gmLineWeight:0.5,gmDotSize:1.5,gmMaxBlock:8};
 
 const MARATHON_PRESETS = {
   "Marathon Green":{palette:"Marathon Green",dither:"Bayer 4x4",dp:{...DP0,spread:0.8},gfx:{scanlines:{on:true,gap:2,opacity:0.4,speed:0},glitch:{on:true,intensity:0.15,blockSize:8,speed:0.5},rgbShift:{on:true,amount:3,angle:0},noise:{on:true,amount:0.08,speed:0.3},pixelate:{on:false,size:1},vignette:{on:true,strength:0.5},crt:{on:false,curvature:0.2},blockGlitch:{on:false,count:10,maxSize:50},chromatic:{on:false,amount:3},jitter:{on:false,amount:3},colorCycle:{on:false,speed:1},solarize:{on:false,threshold:128,speed:0.5}}},
@@ -278,6 +278,51 @@ function ditherImage(srcData,w,h,algo,palette,p,offsetX,offsetY){
         const show2=blockBr<0.65;
         const on2=bit&&show2;
         const c=on2?pal[pal.length-1]:pal[0];
+        data[i]=c[0];data[i+1]=c[1];data[i+2]=c[2];continue;
+      }
+
+      // --- Grid Matrix ---
+      if(algo==="Grid Matrix"){
+        const cs=Math.max(4,Math.round((p.gmCellSize??20)*dpiS));
+        const lw=Math.max(0.3,(p.gmLineWeight??0.5)*dpiS);
+        const dotR=Math.max(0.5,(p.gmDotSize??1.5)*dpiS);
+        const maxBlk=Math.max(1,Math.round((p.gmMaxBlock??8)*dpiS));
+
+        // Rotated 45° coordinates for diamond grid
+        const d1=((px+py)%cs+cs)%cs;  // diagonal 1
+        const d2=((px-py)%cs+cs)%cs;  // diagonal 2
+
+        // Thin diagonal grid lines (always visible)
+        const onLine = d1<lw || d1>(cs-lw) || d2<lw || d2>(cs-lw);
+
+        // Dot at grid intersections (where both diagonals meet)
+        const nearD1 = d1<dotR || d1>(cs-dotR);
+        const nearD2 = d2<dotR || d2>(cs-dotR);
+        const onDot = nearD1 && nearD2;
+
+        // Block at coarser grid (every 2 cells), sized by brightness
+        const coarse = cs*2;
+        const cx2=((px%coarse)+coarse)%coarse;
+        const cy2=((py%coarse)+coarse)%coarse;
+        const blockCenter = cx2>=cs-1 && cx2<=cs+1 && cy2>=cs-1 && cy2<=cs+1;
+        // Block size scales with brightness
+        const blockSz = Math.round(br * maxBlk);
+        const inBlock = blockSz>0 && Math.abs(cx2-cs)<blockSz && Math.abs(cy2-cs)<blockSz;
+
+        // Combine layers: blocks (brightest), dots (mid), lines (dimmest)
+        let on = false;
+        if(inBlock) on = true;
+        else if(onDot && br>0.15) on = true;
+        else if(onLine && br>0.05) on = true;
+
+        // For mid-brightness: also show small dots at half-grid
+        if(!on && br>0.3){
+          const halfD1=((px+py+Math.round(cs/2))%cs+cs)%cs;
+          const halfD2=((px-py+Math.round(cs/2))%cs+cs)%cs;
+          if((halfD1<dotR*0.6||halfD1>(cs-dotR*0.6))&&(halfD2<dotR*0.6||halfD2>(cs-dotR*0.6))) on=true;
+        }
+
+        const c=on?pal[pal.length-1]:pal[0];
         data[i]=c[0];data[i+1]=c[1];data[i+2]=c[2];continue;
       }
 
@@ -846,6 +891,12 @@ export default function UESCProcessor(){
                   <Rng label="Digits / Row" value={dp.numBlockW} min={2} max={10} step={1} onChange={v=>setDp(p=>({...p,numBlockW:v}))}/>
                   <Rng label="Rows / Block" value={dp.numBlockH} min={2} max={12} step={1} onChange={v=>setDp(p=>({...p,numBlockH:v}))}/>
                   <Rng label="Block Gap" value={dp.numGap} min={4} max={50} step={1} onChange={v=>setDp(p=>({...p,numGap:v}))}/>
+                </>)}
+                {ditherAlgo==="Grid Matrix"&&(<>
+                  <Rng label="Cell Size" value={dp.gmCellSize} min={4} max={50} step={1} onChange={v=>setDp(p=>({...p,gmCellSize:v}))}/>
+                  <Rng label="Line Weight" value={dp.gmLineWeight} min={0.2} max={3} step={0.1} onChange={v=>setDp(p=>({...p,gmLineWeight:v}))}/>
+                  <Rng label="Dot Size" value={dp.gmDotSize} min={0.5} max={5} step={0.1} onChange={v=>setDp(p=>({...p,gmDotSize:v}))}/>
+                  <Rng label="Max Block" value={dp.gmMaxBlock} min={1} max={20} step={1} onChange={v=>setDp(p=>({...p,gmMaxBlock:v}))}/>
                 </>)}
               </>)}
             </>)}
